@@ -1,20 +1,22 @@
 from ultralytics import YOLO
 import cv2
 import numpy as np
+import threading
+from queue import Queue
+import time
 
 # -----------------------------
 # SETTINGS
 # -----------------------------
 VIDEO_PATH = "woman_skating.mp4"
-MODEL_PATH = "annotatedmodel/my_model.pt"
-OUTPUT_PATH = "tracked_output.mp4"
+MODEL_PATH = "models/my_model.pt"
 
-IMGSZ = 640                  # YOLO input size
-INITIAL_CONF = 0.99          # high confidence for first detection
-REFRESH_CONF = 0.5           # lower confidence for periodic re-detection
-DETECT_EVERY_N_FRAMES = 60   # YOLO runs every 60 frames (~1 min at 1 FPS)
-TRACK_SCALE = 0.5            # scale down frame for faster tracking
-MAX_TRAIL_POINTS = 30        # trail length
+IMGSZ = 640
+INITIAL_CONF = 0.5  # lowered for better detection
+REFRESH_CONF = 0.5
+DETECT_EVERY_N_FRAMES = 300
+TRACK_SCALE = 0.5
+MAX_TRAIL_POINTS = 30
 
 # -----------------------------
 # LOAD YOLO MODEL
@@ -27,10 +29,8 @@ model = YOLO(MODEL_PATH, task="detect")
 cap = cv2.VideoCapture(VIDEO_PATH)
 width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
 height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-fps = int(cap.get(cv2.CAP_PROP_FPS))
-
-fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-video_out = cv2.VideoWriter(OUTPUT_PATH, fourcc, fps, (width, height))
+fps = cap.get(cv2.CAP_PROP_FPS) or 30
+frame_interval = 1.0 / fps
 
 USE_GUI = hasattr(cv2, 'imshow')
 frame_count = 0
@@ -46,17 +46,16 @@ track_history = {}
 next_id = 0
 
 # -----------------------------
+# THREADING SETUP
+# -----------------------------
+frame_queue = Queue(maxsize=1)   # main thread puts frames here
+yolo_queue = Queue(maxsize=3)    # YOLO results (buffer up to 3)
+
+# -----------------------------
 # TRACKER CREATION FUNCTION
 # -----------------------------
 def create_tracker():
-    """MOSSE tracker with KCF fallback"""
-    try:
-        return cv2.legacy.TrackerMOSSE_create()
-    except AttributeError:
-        try:
-            return cv2.TrackerMOSSE_create()
-        except AttributeError:
-            return cv2.legacy.TrackerKCF_create()
+    return cv2.legacy.TrackerMOSSE_create()
 
 # -----------------------------
 # INITIALIZE TRACKERS FROM YOLO
@@ -87,9 +86,39 @@ def init_trackers_from_yolo(frame, boxes, classes, confs):
     return trackers_local, ids_local, classes_local, confs_local
 
 # -----------------------------
+# YOLO WORKER THREAD
+# -----------------------------
+def yolo_worker():
+    """
+    Runs YOLO detection on frames received from the main thread.
+    """
+    local_frame_count = 0
+    while True:
+        frame_data = frame_queue.get()
+        if frame_data is None:  # sentinel to exit
+            break
+        local_frame_count, frame_copy = frame_data
+
+        if local_frame_count % DETECT_EVERY_N_FRAMES == 1:
+            results = model(frame_copy, device="cpu", imgsz=IMGSZ, conf=INITIAL_CONF, verbose=False)
+            if len(results[0].boxes) > 0:
+                boxes = results[0].boxes.xyxy.cpu().numpy()
+                classes = results[0].boxes.cls.cpu().numpy().astype(int)
+                confs = results[0].boxes.conf.cpu().numpy()
+                if yolo_queue.full():
+                    yolo_queue.get_nowait()
+                yolo_queue.put((local_frame_count, boxes, classes, confs))
+
+# Start YOLO thread
+thread = threading.Thread(target=yolo_worker, daemon=True)
+thread.start()
+
+# -----------------------------
 # MAIN LOOP
 # -----------------------------
 print("Starting hybrid YOLO + MOSSE tracking...")
+
+start_time = time.time()
 
 while cap.isOpened():
     ret, frame = cap.read()
@@ -98,33 +127,28 @@ while cap.isOpened():
     frame_count += 1
     current_boxes = []
 
+    # Send frame to YOLO thread
+    if not frame_queue.full():
+        frame_queue.put((frame_count, frame.copy()))
+
     # -------------------------
-    # YOLO DETECTION PHASE
+    # APPLY YOLO RESULTS (LATENCY-TOLERANT)
     # -------------------------
-    if frame_count % DETECT_EVERY_N_FRAMES == 1:
-        # Use high confidence for first frame or lower for periodic refresh
-        conf_threshold = INITIAL_CONF if frame_count == 1 else REFRESH_CONF
-        print(f"Frame {frame_count}: Running YOLO detection with conf={conf_threshold}...")
-
-        results = model(frame, device="cpu", imgsz=IMGSZ, conf=conf_threshold, verbose=False)
-
-        if len(results[0].boxes) > 0:
-            boxes = results[0].boxes.xyxy.cpu().numpy()
-            classes = results[0].boxes.cls.cpu().numpy().astype(int)
-            confs = results[0].boxes.conf.cpu().numpy()
-
-            # Initialize or refresh trackers
-            trackers, tracker_ids, tracker_classes, tracker_confs = init_trackers_from_yolo(frame, boxes, classes, confs)
-            current_boxes = [(box, tid, cls, conf) for box, tid, cls, conf in zip(boxes, tracker_ids, tracker_classes, tracker_confs)]
-            print(f"  Initialized/Refreshed {len(trackers)} trackers")
-        else:
-            trackers, tracker_ids, tracker_classes, tracker_confs = [], [], [], []
-            print("  No objects detected")
+    while not yolo_queue.empty():
+        yolo_frame_idx, boxes, classes, confs = yolo_queue.get()
+        # Accept results for current frame or any past frames not yet processed
+        if yolo_frame_idx <= frame_count:
+            trackers, tracker_ids, tracker_classes, tracker_confs = init_trackers_from_yolo(
+                frame, boxes, classes, confs
+            )
+            current_boxes = [(box, tid, cls, conf) for box, tid, cls, conf in zip(
+                boxes, tracker_ids, tracker_classes, tracker_confs)]
+            print(f"Frame {frame_count}: YOLO updated {len(trackers)} trackers")
 
     # -------------------------
     # TRACKING PHASE
     # -------------------------
-    elif trackers:
+    if trackers:
         small = cv2.resize(frame, None, fx=TRACK_SCALE, fy=TRACK_SCALE)
         new_trackers, new_ids, new_classes, new_confs = [], [], [], []
 
@@ -150,21 +174,16 @@ while cap.isOpened():
     # -------------------------
     for box, tid, cls, conf in current_boxes:
         x1, y1, x2, y2 = box.astype(int)
-
-        # Stable color per ID
         rng = np.random.RandomState(tid)
         color = tuple(rng.randint(0, 255, 3).tolist())
 
-        # Draw bounding box
         cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
-
-        # Draw label + confidence
         label = f"ID:{tid} {model.names[cls]} {int(conf*100)}%"
         (label_w, label_h), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
         cv2.rectangle(frame, (x1, y1 - label_h - 10), (x1 + label_w, y1), color, -1)
         cv2.putText(frame, label, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 2)
 
-        # Update trail
+        # Trails
         center = ((x1 + x2)//2, (y1 + y2)//2)
         if tid not in track_history:
             track_history[tid] = []
@@ -172,23 +191,26 @@ while cap.isOpened():
         if len(track_history[tid]) > MAX_TRAIL_POINTS:
             track_history[tid].pop(0)
 
-        # Draw trail
         if len(track_history[tid]) > 1:
             pts = np.array(track_history[tid], np.int32)
             cv2.polylines(frame, [pts], False, color, 2, lineType=cv2.LINE_AA)
 
-    # Display mode info
-    mode = "YOLO" if frame_count % DETECT_EVERY_N_FRAMES == 1 else "Tracking"
+    mode = "Tracking"
+    if current_boxes:
+        mode = "YOLO"
+
     cv2.putText(frame, f"Frame: {frame_count} | Mode: {mode} | Trackers: {len(trackers)}",
                 (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,255,0), 2)
 
-    # Write frame to video
-    video_out.write(frame)
-
-    # Show GUI if available
+    # -------------------------
+    # DISPLAY WITH REAL-TIME SYNC
+    # -------------------------
     if USE_GUI:
         cv2.imshow("Hybrid YOLO + MOSSE Tracking", frame)
-        if cv2.waitKey(1) & 0xFF == ord("q"):
+        elapsed = time.time() - start_time
+        expected_time = frame_count / fps
+        wait_ms = max(int((expected_time - elapsed) * 1000), 1)
+        if cv2.waitKey(wait_ms) & 0xFF == ord("q"):
             break
     else:
         if frame_count % 30 == 0:
@@ -198,10 +220,8 @@ while cap.isOpened():
 # CLEANUP
 # -----------------------------
 cap.release()
-video_out.release()
-if USE_GUI:
-    cv2.destroyAllWindows()
+cv2.destroyAllWindows()
+frame_queue.put(None)  # stop YOLO thread
 
 print("\nProcessing complete!")
 print(f"Total frames: {frame_count}")
-print(f"Output saved to: {OUTPUT_PATH}")
