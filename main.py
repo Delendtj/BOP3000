@@ -6,7 +6,7 @@ import numpy as np
 # SETTINGS
 # -----------------------------
 VIDEO_PATH = "woman_skating.mp4"
-MODEL_PATH = "modeln/train/weights/best_openvino_model"
+MODEL_PATH = "annotatedmodel/my_model.pt"
 OUTPUT_PATH = "tracked_output.mp4"
 
 IMGSZ = 640                  # YOLO input size
