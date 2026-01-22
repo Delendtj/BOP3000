@@ -3,7 +3,6 @@
   <component name="ChangeListManager">
     <list default="true" id="07fd18cc-2bca-4a2f-80af-2f0d24b97d14" name="Changes" comment="Added Trained model">
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/main.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -28,8 +27,8 @@
 }</component>
   <component name="GithubPullRequestsUISettings">{
   &quot;selectedUrlAndAccountId&quot;: {
-    &quot;url&quot;: &quot;https://github.com/Delendtj/BOP3000&quot;,
-    &quot;accountId&quot;: &quot;a32c4b16-3849-4c07-91c1-9228e6e9b9ba&quot;
+    &quot;url&quot;: &quot;https://github.com/Delendtj/BOP3000.git&quot;,
+    &quot;accountId&quot;: &quot;876be700-80a9-45d9-9ace-733787910330&quot;
   }
 }</component>
   <component name="ProblemsViewState">
@@ -51,8 +50,10 @@
     "RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252": "true",
     "RunOnceActivity.git.unshallow": "true",
     "RunOnceActivity.typescript.service.memoryLimit.init": "true",
+    "SHARE_PROJECT_CONFIGURATION_FILES": "true",
     "ai.playground.ignore.import.keys.banner.in.settings": "true",
     "git-widget-placeholder": "main",
+    "last_opened_file_path": "/home/sumitro/Documents/School/BOP3000/Project",
     "nodejs_package_manager_path": "npm",
     "settings.editor.selected.configurable": "com.jetbrains.python.configuration.PyActiveSdkModuleConfigurable",
     "vue.rearranger.settings.migration": "true"
@@ -222,6 +223,8 @@
       <workItem from="1768988323434" duration="7746000" />
       <workItem from="1769000815533" duration="725000" />
       <workItem from="1769001570196" duration="1678000" />
+      <workItem from="1769079589543" duration="829000" />
+      <workItem from="1769080810761" duration="9281000" />
     </task>
     <task id="LOCAL-00001" summary="Added Trained model">
       <option name="closed" value="true" />
