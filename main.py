@@ -4,17 +4,38 @@ import numpy as np
 import threading
 from queue import Queue
 import time
+import argparse
+
+# -----------------------------
+# CLI args
+# -----------------------------
+parser = argparse.ArgumentParser()
+parser.add_argument('--model', help='Path to YOLO model file (example: "runs/detect/train/weights/best.pt")', type=str,
+                    required=True)
+# We should implement usb stream so it can take camera input, in the  future.
+parser.add_argument('--source', help='Source to the input video', type=str,
+                    required=True)
+parser.add_argument('--init-conf', help='Minimum confidence threshold for displaying detected objects (example: "0.4")', type=float,
+                    default=0.5, dest='init_conf')
+parser.add_argument('--refresh-conf', help='Minimum confidence threshold for displaying detected objects (example: "0.4")', type=float,
+                    default=0.5, dest='refresh_conf')
+parser.add_argument('--imagesize', type=int,
+                    default=640)
+parser.add_argument('--detect-every', help="Amount of frames before the model detects. 300 means that it detects every 300th frame.", type=int,
+                    default=300, dest='detect_every')
+
+args = parser.parse_args()
 
 # -----------------------------
 # SETTINGS
 # -----------------------------
-VIDEO_PATH = "woman_skating.mp4"
-MODEL_PATH = "models/my_model.pt"
+VIDEO_PATH = args.source
+MODEL_PATH = args.model
 
-IMGSZ = 640
-INITIAL_CONF = 0.5  # lowered for better detection
-REFRESH_CONF = 0.5
-DETECT_EVERY_N_FRAMES = 300
+IMGSZ = args.imagesize
+INITIAL_CONF = args.init_conf  # lowered for better detection
+REFRESH_CONF = args.refresh_conf
+DETECT_EVERY_N_FRAMES = args.detect_every
 TRACK_SCALE = 0.5
 MAX_TRAIL_POINTS = 30
 
@@ -177,9 +198,11 @@ while cap.isOpened():
         rng = np.random.RandomState(tid)
         color = tuple(rng.randint(0, 255, 3).tolist())
 
+        # Bounding box
         cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2)
         label = f"ID:{tid} {model.names[cls]} {int(conf*100)}%"
         (label_w, label_h), _ = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, 0.6, 2)
+        # Object info box
         cv2.rectangle(frame, (x1, y1 - label_h - 10), (x1 + label_w, y1), color, -1)
         cv2.putText(frame, label, (x1, y1 - 5), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255,255,255), 2)
 
@@ -199,8 +222,12 @@ while cap.isOpened():
     if current_boxes:
         mode = "YOLO"
 
-    cv2.putText(frame, f"Frame: {frame_count} | Mode: {mode} | Trackers: {len(trackers)}",
+    current_fps = frame_count / (time.time() - start_time)
+
+    cv2.putText(frame, f"FrameCount: {frame_count} | Mode: {mode} | Trackers: {len(trackers)}",
                 (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0,255,0), 2)
+    cv2.putText(frame, f"FPS: {format(current_fps, '.2f')}",
+                (10, 60), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
 
     # -------------------------
     # DISPLAY WITH REAL-TIME SYNC
