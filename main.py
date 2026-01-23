@@ -18,11 +18,11 @@ parser.add_argument('--source', help='Source to the input video', type=str,
 parser.add_argument('--init-conf', help='Minimum confidence threshold for displaying detected objects (example: "0.4")', type=float,
                     default=0.5, dest='init_conf')
 parser.add_argument('--refresh-conf', help='Minimum confidence threshold for displaying detected objects (example: "0.4")', type=float,
-                    default=0.5, dest='refresh_conf')
+                    default=0.3, dest='refresh_conf')
 parser.add_argument('--imagesize', type=int,
                     default=640)
-parser.add_argument('--detect-every', help="Amount of frames before the model detects. 300 means that it detects every 300th frame.", type=int,
-                    default=300, dest='detect_every')
+parser.add_argument('--detect-every', help="Amount of frames before the model detects. 300 means that it detects every 120th frame.", type=int,
+                    default=60, dest='detect_every')
 
 args = parser.parse_args()
 
@@ -36,7 +36,7 @@ IMGSZ = args.imagesize
 INITIAL_CONF = args.init_conf  # lowered for better detection
 REFRESH_CONF = args.refresh_conf
 DETECT_EVERY_N_FRAMES = args.detect_every
-TRACK_SCALE = 0.5
+TRACK_SCALE = 1
 MAX_TRAIL_POINTS = 30
 
 # -----------------------------
