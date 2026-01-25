@@ -9,7 +9,7 @@ from threading import Thread
 MODEL_XML = "models/tuned_openvino/tuned_model.xml"
 VIDEO_PATH = "testdata.mp4"
 INPUT_SIZE = 640
-CONF_THRESH = 0.4
+CONF_THRESH = 0.7
 ESC_KEY = 27
 NUM_ASYNC_REQUESTS = 2
 MAX_QUEUE_SIZE = 20
