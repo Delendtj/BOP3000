@@ -6,8 +6,8 @@ from queue import Queue
 from threading import Thread
 
 # ---------------- CONFIG ----------------
-MODEL_XML = "models/openvino_updated_model/model.xml"
-VIDEO_PATH = "victor.mp4"
+MODEL_XML = "models/tuned_openvino/tuned_model.xml"
+VIDEO_PATH = "testdata.mp4"
 INPUT_SIZE = 640
 CONF_THRESH = 0.4
 ESC_KEY = 27
