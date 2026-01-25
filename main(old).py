@@ -10,7 +10,7 @@ import argparse
 # CLI args
 # -----------------------------
 parser = argparse.ArgumentParser()
-parser.add_argument('--model', help='Path to YOLO model file (example: "runs/detect/train/weights/best.pt")', type=str,
+parser.add_argument('--model', help='Path to YOLO model file (example: "runs/detect/train/weights/tuned_model.pt")', type=str,
                     required=True)
 # We should implement usb stream so it can take camera input, in the  future.
 parser.add_argument('--source', help='Source to the input video', type=str,
