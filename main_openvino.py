@@ -5,7 +5,6 @@ from openvino.runtime import Core
 from queue import Queue
 from threading import Thread
 
-# ---------------- CONFIG ----------------
 MODEL_XML = "models/tuned_openvino/tuned_model.xml"
 VIDEO_PATH = "testdata.mp4"
 INPUT_SIZE = 640
@@ -15,10 +14,8 @@ NUM_ASYNC_REQUESTS = 2
 MAX_QUEUE_SIZE = 20
 CLASS_NAMES = None
 
-# ---------------- LOAD MODEL ----------------
 core = Core()
 
-# CRITICAL FIX: Force FP32 precision on GPU
 core.set_property("GPU", {"INFERENCE_PRECISION_HINT": "f32"})
 
 model = core.read_model(MODEL_XML)
@@ -26,7 +23,6 @@ compiled_model = core.compile_model(model, "GPU")
 input_layer = compiled_model.input(0)
 
 
-# ---------------- PREPROCESS ----------------
 def preprocess(frame):
     img = cv2.resize(frame, (INPUT_SIZE, INPUT_SIZE))
     img = img[:, :, ::-1]  # BGR -> RGB
@@ -34,7 +30,6 @@ def preprocess(frame):
     return img
 
 
-# ---------------- POSTPROCESS ----------------
 def postprocess(output, frame_shape):
     h, w = frame_shape[:2]
     detections = []
@@ -74,12 +69,10 @@ def postprocess(output, frame_shape):
     return detections
 
 
-# ---------------- QUEUES ----------------
 frame_queue = Queue(maxsize=MAX_QUEUE_SIZE)
 output_queue = Queue(maxsize=MAX_QUEUE_SIZE)
 
 
-# ---------------- FRAME READER ----------------
 def frame_reader(video_path, queue):
     cap = cv2.VideoCapture(video_path)
     assert cap.isOpened(), f"Cannot open video: {video_path}"
@@ -90,7 +83,7 @@ def frame_reader(video_path, queue):
         input_tensor = preprocess(frame)
         queue.put((frame, input_tensor))
     cap.release()
-    # Signal inference loop to stop
+
     for _ in range(NUM_ASYNC_REQUESTS):
         queue.put(None)
 
@@ -98,7 +91,6 @@ def frame_reader(video_path, queue):
 Thread(target=frame_reader, args=(VIDEO_PATH, frame_queue), daemon=True).start()
 
 
-# ---------------- INFERENCE WORKER ----------------
 def inference_worker():
     request = compiled_model.create_infer_request()
 
@@ -110,22 +102,16 @@ def inference_worker():
 
         frame, input_tensor = item
 
-        # Run inference
         request.infer({input_layer: input_tensor})
 
-        # Get output
         output_tensor = request.get_output_tensor(0)
         output = output_tensor.data[:].astype(np.float32)
 
-        # Put result in output queue
         output_queue.put((frame, output))
 
-
-# Start inference workers
 for _ in range(NUM_ASYNC_REQUESTS):
     Thread(target=inference_worker, daemon=True).start()
 
-# ---------------- DISPLAY LOOP ----------------
 prev_time = time.time()
 while True:
     item = output_queue.get()
