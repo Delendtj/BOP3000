@@ -1,10 +1,35 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <project version="4">
   <component name="ChangeListManager">
-    <list default="true" id="07fd18cc-2bca-4a2f-80af-2f0d24b97d14" name="Changes" comment="Updated requirements.txt">
+    <list default="true" id="07fd18cc-2bca-4a2f-80af-2f0d24b97d14" name="Changes" comment="added cv2 to requirements.txt">
+      <change afterPath="$PROJECT_DIR$/Hardware_Detector.py" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/Tensor_loader.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/shelf/Uncommitted_changes_before_Update_at_25_01_2026_12_13_[Changes]/shelved.patch" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/shelf/Uncommitted_changes_before_Update_at_25_01_2026_12_13__Changes_.xml" beforeDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Model converter.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/annotatedmodel/my_model.pt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/annotatedmodel/train/args.yaml" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/annotatedmodel/train/labels.jpg" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/annotatedmodel/train/results.csv" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/annotatedmodel/train/train_batch0.jpg" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/annotatedmodel/train/train_batch1.jpg" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/annotatedmodel/train/train_batch2.jpg" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/annotatedmodel/train/weights/best.pt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/annotatedmodel/train/weights/last.pt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/compare.py" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/main(old).py" beforeDir="false" />
       <change beforePath="$PROJECT_DIR$/main_openvino.py" beforeDir="false" afterPath="$PROJECT_DIR$/main_openvino.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/requirements.txt" beforeDir="false" afterPath="$PROJECT_DIR$/requirements.txt" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/models/my_model.pt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/models/train/args.yaml" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/models/train/labels.jpg" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/models/train/results.csv" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/models/train/train_batch0.jpg" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/models/train/train_batch1.jpg" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/models/train/train_batch2.jpg" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/models/train/weights/best.pt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/models/train/weights/last.pt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/models/yolo_engine.trt" beforeDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -48,6 +73,7 @@
   &quot;keyToString&quot;: {
     &quot;ModuleVcsDetector.initialDetectionPerformed&quot;: &quot;true&quot;,
     &quot;Python.CUDA.executor&quot;: &quot;Run&quot;,
+    &quot;Python.Hardware_Detector.executor&quot;: &quot;Run&quot;,
     &quot;Python.Main ONNX_CUDA.executor&quot;: &quot;Run&quot;,
     &quot;Python.Main_onnx_cuda.executor&quot;: &quot;Run&quot;,
     &quot;Python.Model converter.executor&quot;: &quot;Run&quot;,
@@ -140,8 +166,8 @@
   <component name="SharedIndexes">
     <attachedChunks>
       <set>
-        <option value="bundled-js-predefined-d6986cc7102b-9b0f141eb926-JavaScript-PY-253.29346.308" />
-        <option value="bundled-python-sdk-ca5e2b39c7df-6e1f45a539f7-com.jetbrains.pycharm.pro.sharedIndexes.bundled-PY-253.29346.308" />
+        <option value="bundled-js-predefined-d6986cc7102b-9b0f141eb926-JavaScript-PY-253.30387.127" />
+        <option value="bundled-python-sdk-3944b0c99280-6d6dccd035ac-com.jetbrains.pycharm.pro.sharedIndexes.bundled-PY-253.30387.127" />
       </set>
     </attachedChunks>
   </component>
@@ -166,7 +192,10 @@
       <workItem from="1769202124905" duration="7033000" />
       <workItem from="1769345872808" duration="1841000" />
       <workItem from="1769421115134" duration="4908000" />
-      <workItem from="1769430982582" duration="393000" />
+      <workItem from="1769430982582" duration="663000" />
+      <workItem from="1769433931647" duration="12424000" />
+      <workItem from="1770034725873" duration="217000" />
+      <workItem from="1770035059623" duration="1139000" />
     </task>
     <task id="LOCAL-00001" summary="Added Trained model">
       <option name="closed" value="true" />
@@ -192,7 +221,15 @@
       <option name="project" value="LOCAL" />
       <updated>1769424999156</updated>
     </task>
-    <option name="localTasksCounter" value="4" />
+    <task id="LOCAL-00004" summary="added cv2 to requirements.txt">
+      <option name="closed" value="true" />
+      <created>1769431396605</created>
+      <option name="number" value="00004" />
+      <option name="presentableId" value="LOCAL-00004" />
+      <option name="project" value="LOCAL" />
+      <updated>1769431396605</updated>
+    </task>
+    <option name="localTasksCounter" value="5" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -213,10 +250,12 @@
     <MESSAGE value="Added Trained model" />
     <MESSAGE value="Refactored file name for openvino and cuda scripts" />
     <MESSAGE value="Updated requirements.txt" />
-    <option name="LAST_COMMIT_MESSAGE" value="Updated requirements.txt" />
+    <MESSAGE value="added cv2 to requirements.txt" />
+    <option name="LAST_COMMIT_MESSAGE" value="added cv2 to requirements.txt" />
   </component>
   <component name="com.intellij.coverage.CoverageDataManagerImpl">
     <SUITE FILE_PATH="coverage/SpeedSkate$new.coverage" NAME="new Coverage Results" MODIFIED="1769171422118" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
+    <SUITE FILE_PATH="coverage/SpeedSkate$Hardware_Detector.coverage" NAME="Hardware_Detector Coverage Results" MODIFIED="1769516971158" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
     <SUITE FILE_PATH="coverage/bop3000$compare.coverage" NAME="compare Coverage Results" MODIFIED="1769347015739" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
     <SUITE FILE_PATH="coverage/bop3000$main.coverage" NAME="main Coverage Results" MODIFIED="1769135290372" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
     <SUITE FILE_PATH="coverage/bop3000$CUDA.coverage" NAME="CUDA Coverage Results" MODIFIED="1769347323632" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/main ONNX" />
@@ -224,7 +263,7 @@
     <SUITE FILE_PATH="coverage/SpeedSkate$Main_onnx_cuda.coverage" NAME="Main_onnx_cuda Coverage Results" MODIFIED="1769424055572" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
     <SUITE FILE_PATH="coverage/SpeedSkate$compare.coverage" NAME="compare Coverage Results" MODIFIED="1769202527678" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
     <SUITE FILE_PATH="coverage/bop3000$Main_ONNX_CUDA.coverage" NAME="Main ONNX_CUDA Coverage Results" MODIFIED="1769347351598" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
-    <SUITE FILE_PATH="coverage/SpeedSkate$main_openvino.coverage" NAME="main_openvino Coverage Results" MODIFIED="1769423906760" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
+    <SUITE FILE_PATH="coverage/SpeedSkate$main_openvino.coverage" NAME="main_openvino Coverage Results" MODIFIED="1769767686322" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
     <SUITE FILE_PATH="coverage/SpeedSkate$main.coverage" NAME="main Coverage Results" MODIFIED="1769348488261" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
   </component>
 </project>
