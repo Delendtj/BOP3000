@@ -6,7 +6,7 @@ import numpy as np
 
 
 class HardwareDetector:
-       def __init__(self, config):
+    def __init__(self, config):
 
         self.config = config
         self.hardware_type = None
