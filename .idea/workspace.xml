@@ -2,8 +2,15 @@
 <project version="4">
   <component name="ChangeListManager">
     <list default="true" id="07fd18cc-2bca-4a2f-80af-2f0d24b97d14" name="Changes" comment="Refactored file structure, stashed deprecated code, added Hardware_Detector.py and Tensor_loader.py.">
+      <change afterPath="$PROJECT_DIR$/inference.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/Project.iml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/Project.iml" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.idea/misc.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/misc.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/split.py" beforeDir="false" afterPath="$PROJECT_DIR$/utilities/split.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/.python-version" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/Hardware_Detector.py" beforeDir="false" afterPath="$PROJECT_DIR$/Hardware_Detector.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Main_onnx_cuda.py" beforeDir="false" afterPath="$PROJECT_DIR$/Old/Main_onnx_cuda.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/Tensor_loader.py" beforeDir="false" afterPath="$PROJECT_DIR$/Tensor_loader.py" afterDir="false" />
+      <change beforePath="$PROJECT_DIR$/main_openvino.py" beforeDir="false" afterPath="$PROJECT_DIR$/Old/main_openvino.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -70,6 +77,8 @@
 }</component>
   <component name="RecentsManager">
     <key name="MoveFile.RECENT_KEYS">
+      <recent name="C:\Users\Dennis\Desktop\python\bop3000\Old" />
+      <recent name="C:\Users\Dennis\Desktop\python\bop3000" />
       <recent name="C:\Users\denni\Desktop\Python\SpeedSkate\utilities" />
       <recent name="C:\Users\denni\Desktop\Python\SpeedSkate" />
     </key>
@@ -239,16 +248,16 @@
     <option name="LAST_COMMIT_MESSAGE" value="Refactored file structure, stashed deprecated code, added Hardware_Detector.py and Tensor_loader.py." />
   </component>
   <component name="com.intellij.coverage.CoverageDataManagerImpl">
-    <SUITE FILE_PATH="coverage/SpeedSkate$new.coverage" NAME="new Coverage Results" MODIFIED="1769171422118" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
+    <SUITE FILE_PATH="coverage/bop3000$CUDA.coverage" NAME="CUDA Coverage Results" MODIFIED="1769347323632" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/main ONNX" />
+    <SUITE FILE_PATH="coverage/SpeedSkate$main.coverage" NAME="main Coverage Results" MODIFIED="1769348488261" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
+    <SUITE FILE_PATH="coverage/SpeedSkate$Main_onnx_cuda.coverage" NAME="Main_onnx_cuda Coverage Results" MODIFIED="1769424055572" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
+    <SUITE FILE_PATH="coverage/SpeedSkate$main_openvino.coverage" NAME="main_openvino Coverage Results" MODIFIED="1769767686322" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
+    <SUITE FILE_PATH="coverage/SpeedSkate$compare.coverage" NAME="compare Coverage Results" MODIFIED="1769202527678" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
     <SUITE FILE_PATH="coverage/SpeedSkate$Hardware_Detector.coverage" NAME="Hardware_Detector Coverage Results" MODIFIED="1769516971158" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
     <SUITE FILE_PATH="coverage/bop3000$compare.coverage" NAME="compare Coverage Results" MODIFIED="1769347015739" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
-    <SUITE FILE_PATH="coverage/bop3000$main.coverage" NAME="main Coverage Results" MODIFIED="1769135290372" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
-    <SUITE FILE_PATH="coverage/bop3000$CUDA.coverage" NAME="CUDA Coverage Results" MODIFIED="1769347323632" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/main ONNX" />
     <SUITE FILE_PATH="coverage/bop3000$Model_converter.coverage" NAME="Model converter Coverage Results" MODIFIED="1769347466605" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
-    <SUITE FILE_PATH="coverage/SpeedSkate$Main_onnx_cuda.coverage" NAME="Main_onnx_cuda Coverage Results" MODIFIED="1769424055572" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
-    <SUITE FILE_PATH="coverage/SpeedSkate$compare.coverage" NAME="compare Coverage Results" MODIFIED="1769202527678" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
     <SUITE FILE_PATH="coverage/bop3000$Main_ONNX_CUDA.coverage" NAME="Main ONNX_CUDA Coverage Results" MODIFIED="1769347351598" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
-    <SUITE FILE_PATH="coverage/SpeedSkate$main_openvino.coverage" NAME="main_openvino Coverage Results" MODIFIED="1769767686322" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
-    <SUITE FILE_PATH="coverage/SpeedSkate$main.coverage" NAME="main Coverage Results" MODIFIED="1769348488261" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
+    <SUITE FILE_PATH="coverage/bop3000$main.coverage" NAME="main Coverage Results" MODIFIED="1770079204652" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
+    <SUITE FILE_PATH="coverage/SpeedSkate$new.coverage" NAME="new Coverage Results" MODIFIED="1769171422118" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
   </component>
 </project>

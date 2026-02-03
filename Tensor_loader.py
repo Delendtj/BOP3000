@@ -1,10 +1,16 @@
+import os
+import numpy as np
+import tensorrt as trt
+import pycuda.driver as cuda
+import pycuda.autoinit  # This initializes CUDA context automatically
+
+TRT_LOGGER = trt.Logger(trt.Logger.WARNING)
+
 
 def build_engine(onnx_path, engine_path, use_fp16=False):
-
-    print(f"\n{'=' * 60}")
     print(f"Building TensorRT engine from {onnx_path}")
     print(f"This may take a few minutes on first run...")
-    print(f"{'=' * 60}\n")
+
 
     builder = trt.Builder(TRT_LOGGER)
     network = builder.create_network(1 << int(trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH))
@@ -24,7 +30,7 @@ def build_engine(onnx_path, engine_path, use_fp16=False):
 
     if use_fp16:
         config.set_flag(trt.BuilderFlag.FP16)
-        print("✓ FP16 mode enabled")
+        print("FP16 mode enabled")
 
     # Build engine
     print("Building engine... (this takes time)")
@@ -35,50 +41,69 @@ def build_engine(onnx_path, engine_path, use_fp16=False):
         return None
 
     # Save engine
+    os.makedirs(os.path.dirname(engine_path), exist_ok=True)
     with open(engine_path, 'wb') as f:
         f.write(serialized_engine)
 
-    print(f"✓ Engine saved to {engine_path}\n")
+    print(f"Engine saved to {engine_path}")
+    print(f"{'=' * 60}\n")
     return serialized_engine
 
 
 def load_engine(engine_path):
-    """Load TensorRT engine from file"""
+    print(f"Loading cached engine from {engine_path}")
     with open(engine_path, 'rb') as f:
         return f.read()
 
 
-# Build or load engine
-import os
+def init_tensorrt(onnx_path, engine_path, use_fp16=False):
 
-if os.path.exists(ENGINE_PATH):
-    print(f"✓ Loading cached engine from {ENGINE_PATH}")
-    serialized_engine = load_engine(ENGINE_PATH)
-else:
-    serialized_engine = build_engine(ONNX_MODEL_PATH, ENGINE_PATH, USE_FP16)
+    # Build or load engine
+    if os.path.exists(engine_path):
+        serialized_engine = load_engine(engine_path)
+    else:
+        serialized_engine = build_engine(onnx_path, engine_path, use_fp16)
 
-runtime = trt.Runtime(TRT_LOGGER)
-engine = runtime.deserialize_cuda_engine(serialized_engine)
-context = engine.create_execution_context()
+    if serialized_engine is None:
+        raise RuntimeError("Failed to create TensorRT engine")
 
-print(f"Engine info:")
-print(f"  Input: {engine.get_tensor_name(0)}, shape: {engine.get_tensor_shape(engine.get_tensor_name(0))}")
-print(f"  Output: {engine.get_tensor_name(1)}, shape: {engine.get_tensor_shape(engine.get_tensor_name(1))}")
-print(f"  Device: {cuda.Device(0).name()}\n")
+    # Deserialize engine
+    runtime = trt.Runtime(TRT_LOGGER)
+    engine = runtime.deserialize_cuda_engine(serialized_engine)
+    context = engine.create_execution_context()
 
-# Allocate buffers
-input_binding = engine.get_tensor_name(0)
-output_binding = engine.get_tensor_name(1)
+    # Get tensor bindings
+    input_binding = engine.get_tensor_name(0)
+    output_binding = engine.get_tensor_name(1)
 
-input_shape = engine.get_tensor_shape(input_binding)
-output_shape = engine.get_tensor_shape(output_binding)
+    # Get shapes
+    input_shape = engine.get_tensor_shape(input_binding)
+    output_shape = engine.get_tensor_shape(output_binding)
 
-input_size_bytes = trt.volume(input_shape) * np.dtype(np.float32).itemsize
-output_size_bytes = trt.volume(output_shape) * np.dtype(np.float32).itemsize
+    # Calculate buffer sizes
+    input_size_bytes = trt.volume(input_shape) * np.dtype(np.float32).itemsize
+    output_size_bytes = trt.volume(output_shape) * np.dtype(np.float32).itemsize
 
-# Allocate device memory
-d_input = cuda.mem_alloc(input_size_bytes)
-d_output = cuda.mem_alloc(output_size_bytes)
+    # Allocate device memory
+    d_input = cuda.mem_alloc(input_size_bytes)
+    d_output = cuda.mem_alloc(output_size_bytes)
 
-# Create CUDA stream
-stream = cuda.Stream()
+    # Create CUDA stream
+    stream = cuda.Stream()
+
+
+    return {
+        "engine": engine,
+        "context": context,
+        "input_binding": input_binding,
+        "output_binding": output_binding,
+        "input_shape": input_shape,
+        "output_shape": output_shape,
+        "input_size_bytes": input_size_bytes,
+        "output_size_bytes": output_size_bytes,
+        "d_input": d_input,
+        "d_output": d_output,
+        "stream": stream,
+    }
+
+## Claude fikse dette, i dont get it - DL
