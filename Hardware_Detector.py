@@ -2,9 +2,12 @@ import os
 import sys
 import subprocess
 
-class HardwareDetector:
+import numpy as np
 
-    def __init__(self, config):
+
+class HardwareDetector:
+       def __init__(self, config):
+
         self.config = config
         self.hardware_type = None
 
@@ -51,33 +54,33 @@ class HardwareDetector:
         model_path = self.config['Model_Cuda_path']
         engine_path = self.config['Tensor_engine_path']
 
+        if not engine_path.endswith('.engine'):
+            engine_path = f"{engine_path}.engine"
+
         if not os.path.exists(model_path):
             raise FileNotFoundError(f"ONNX model not found: {model_path}")
 
         try:
-            import tensorrt as trt
+            import Tensor_loader
         except ImportError:
             raise ImportError(
-                "TensorRT not installed. Install with:\n"
-                "pip install tensorrt"
+                "Tensor_loader fil ikke funnet."
             )
 
-        engine_file = f"{engine_path}.engine"
-
-        if os.path.exists(engine_file):
-            print(f"  Loading existing TensorRT engine: {engine_file}")
-            return self._load_tensorrt_engine(engine_file)
-        else:
-            print(f"  First run detected - building TensorRT engine...")
-            print(f"  This will take a few minutes but only happens once...")
-            return self._build_tensorrt_engine(model_path, engine_file)
+        use_fp16 = self.config.get('USE_FP16', True)
+        # init tensorrt fra filen
+        trt_objects = Tensor_loader.init_tensorrt(
+            onnx_path=model_path,
+            engine_path=engine_path,
+            use_fp16=use_fp16
+        )
+        print("  TensorRT initialized successfully")
+        return trt_objects
 
     def _init_openvino_model(self):
         model_path = self.config['Model_OV_path']
-
         if not os.path.exists(model_path):
             raise FileNotFoundError(f"OpenVINO model not found: {model_path}")
-
         try:
             from openvino.runtime import Core
         except ImportError:
@@ -85,29 +88,13 @@ class HardwareDetector:
                 "OpenVINO not installed. Install with:\n"
                 "pip install openvino"
             )
-
         print(f"  Loading model: {model_path}")
         core = Core()
         model = core.read_model(model_path)
-
         devices = core.available_devices
         device = 'GPU' if 'GPU' in devices else 'CPU'
         compiled_model = core.compile_model(model, device)
-        print("  OpenVINO model loaded successfully")
-
+        print(f"  OpenVINO model loaded successfully on {device}")
         return compiled_model
 
 
-"""
-from Hardware_Detector import HardwareDetector
-paste dette inn i main
-    config = {
-        'Model_OV_path': "models/openvino_updated_model/model.xml",
-        'Model_Tensor_path': "models/model_fp16.onnx",
-        'Model_Cuda_path': "models/model_fp16.onnx",
-        'Tensor_engine_path': "models/tensor_engine"
-    }
-
-    detector = HardwareDetector(config)
-    hardware = detector.detect_hardware()
-"""

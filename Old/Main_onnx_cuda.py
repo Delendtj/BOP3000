@@ -12,9 +12,9 @@ cuda_context = device.make_context()
 context_lock = Lock()
 
 # ---------------- CONFIG ----------------
-ONNX_MODEL_PATH = "models/model_fp16.onnx"  # Change to model_fp16.onnx for FP16
+ONNX_MODEL_PATH = "../models/model_fp16.onnx"  # Change to model_fp16.onnx for FP16
 ENGINE_PATH = "models/yolo_engine.trt"  # Cached TensorRT engine
-VIDEO_PATH = "testdata.mp4"
+VIDEO_PATH = "../testdata.mp4"
 INPUT_SIZE = 640
 CONF_THRESH = 0.7
 ESC_KEY = 27
