@@ -48,6 +48,9 @@ while cap.isOpened():
 
     cv2.imshow('Yolo vision', frame)
 
+    # Hvis de siste 8 bitsa utgjør tallet 27
+    # De siste 8 bitsa representerer ASCII tegnet
+    # Der 27 = ESC
     if cv2.waitKey(1) & 0xFF == 27:
         break
 
