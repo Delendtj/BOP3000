@@ -61,7 +61,7 @@ class HardwareDetector:
             raise FileNotFoundError(f"ONNX model not found: {model_path}")
 
         try:
-            import Tensor_loader
+            import tensor_loader
         except ImportError:
             raise ImportError(
                 "Tensor_loader fil ikke funnet."

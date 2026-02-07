@@ -1,6 +1,6 @@
 import cv2
 import numpy as np
-from Hardware_Detector import HardwareDetector
+from hardware_detector import HardwareDetector
 from inference import InferenceEngine
 
 
