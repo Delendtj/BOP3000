@@ -1,9 +1,8 @@
 import cv2
 import numpy as np
+import tkinter as tk
 from hardware_detector import HardwareDetector
 from inference import InferenceEngine
-
-
 
 config = {
     'Model_OV_path': "models/tuned_openvino/tuned_model.xml",
@@ -12,7 +11,7 @@ config = {
     'USE_FP16': True
 }
 
-data_path="testdata.mp4"
+data_path="../videos/MVI_5224.MP4"
 conf_threshold = 0.6
 input_size = 640
 
@@ -22,8 +21,22 @@ detector = HardwareDetector(config)
 model = detector.initialize_model()
 engine = InferenceEngine(model, detector.hardware_type)
 
+# Dette er for å finne current system resolution size.
+# Kan få problemer for hvis man kjører med flere skjermer/scaled res.
+root = tk.Tk()
+
+system_width = root.winfo_screenwidth()
+system_height = root.winfo_screenheight()
+
 # Open video
 cap = cv2.VideoCapture(data_path)
+
+# Hvis systemets resolution er mindre enn video res så bruker vi system res.
+output_wind_height = system_height if system_height < int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))else int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+output_wind_width = system_width if system_width < int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) else int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+
+cv2.namedWindow('Yolo vision', cv2.WINDOW_NORMAL)
+cv2.resizeWindow('Yolo vision', output_wind_width, output_wind_height)
 
 frame_count = 0
 while cap.isOpened():
