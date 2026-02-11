@@ -1,5 +1,6 @@
 import cv2
 import numpy as np
+
 import tkinter as tk
 from hardware_detector import HardwareDetector
 from inference import InferenceEngine

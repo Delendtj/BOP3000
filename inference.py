@@ -1,5 +1,6 @@
 
 import numpy as np
+from openvino import Core
 
 #tror lowkey hele dette er garbage
 
@@ -60,10 +61,11 @@ class InferenceEngine:
     def _run_openvino(self, input_data):
         """Internal method for OpenVINO inference."""
         # Run inference
-        result = self.model(input_data)
+        input_layer = self.model.input(0)
+        output_layer = self.model.output(0)
 
-        # Extract output tensor (OpenVINO returns a dict)
-        output_data = list(result.values())[0]
+        result = self.model({input_layer: input_data})
+        output_data = result[output_layer]
 
         return output_data
 
