@@ -4,6 +4,7 @@ import numpy as np
 import tkinter as tk
 from hardware_detector import HardwareDetector
 from inference import InferenceEngine
+from utilities.tracker import tracking
 
 config = {
     'Model_OV_path': "models/tuned_openvino/tuned_model.xml",
@@ -59,6 +60,16 @@ while cap.isOpened():
 
     # DETTE KJØRER INFERENCE
     output = engine.run(input_data_batched)
+
+    print(f"Shape: {output.shape}")
+    print(f"First detection: {output[0]}")
+    print(f"Min values: {output.min()}")
+    print(f"Max values: {output.max()}")
+    print(f"Value: {output[0, 0, :]}")
+    #print(f"val: {output[:, 0, :].squeeze()}")
+
+    # Legg til tracking id på output.
+    track = tracking(output, frame)
 
     cv2.imshow('Yolo vision', frame)
 

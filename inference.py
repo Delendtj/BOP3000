@@ -1,6 +1,5 @@
 
 import numpy as np
-from openvino import Core
 
 #tror lowkey hele dette er garbage
 
