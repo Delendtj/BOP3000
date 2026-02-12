@@ -69,7 +69,7 @@ class HardwareDetector:
 
         use_fp16 = self.config.get('USE_FP16', True)
         # init tensorrt fra filen
-        trt_objects = Tensor_loader.init_tensorrt(
+        trt_objects = tensor_loader.init_tensorrt(
             onnx_path=model_path,
             engine_path=engine_path,
             use_fp16=use_fp16

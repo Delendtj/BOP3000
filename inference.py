@@ -1,4 +1,3 @@
-
 import numpy as np
 
 #tror lowkey hele dette er garbage

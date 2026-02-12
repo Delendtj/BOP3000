@@ -1,0 +1,13 @@
+train: ../train/images
+val: ../valid/images
+test: ../test/images
+
+nc: 1
+names: ['Skater']
+
+roboflow:
+  workspace: trck-mwffg
+  project: my-first-project-97imf
+  version: 3
+  license: CC BY 4.0
+  url: https://universe.roboflow.com/trck-mwffg/my-first-project-97imf/dataset/3
