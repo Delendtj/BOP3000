@@ -21,7 +21,7 @@ config = {
     'USE_FP16': True
 }
 
-data_path="../videos/MVI_5224.MP4"
+data_path="DJI_20260207110850_0025_D.MP4"
 conf_threshold = 0.6
 input_size = 640
 
@@ -55,7 +55,7 @@ cv2.resizeWindow('Yolo vision', output_wind_width, output_wind_height)
 # (for hver N detection innenfor en spesifik del av bilde)
 
 # Vi kan bruke ByteTrack her også, merket at det gikk litt raskere.
-tracker = BotSort(reid_weights=Path('osnet_x0_25_msmt17.pt'), device='cpu', half=False, track_high_thresh=0.65)
+tracker = ByteTrack(reid_weights=Path('osnet_x0_25_msmt17.pt'), device='cpu', half=False, track_high_thresh=0.65)
 
 # Tror vi ender opp med å må kjøre REID på en egen thread på en cropped detection/hjelmnummer.
 # Virker som mye mer setup og kompleks da, men tror det blir mer effetkivt.
@@ -90,8 +90,8 @@ while cap.isOpened():
     print(f"Shape: {output.shape}")
     print(f"Value: {output[0, 0, :]}")
 
-    # Legg til tracking id på output.
-    tracking(tracker, output, frame, org_shape)
+    # Legg til tracking id på output. adda conf treshold for å vise kun over confidence i cfg
+    tracking(tracker, output, frame, org_shape, conf_threshold)
 
     cv2.imshow('Yolo vision', frame)
 

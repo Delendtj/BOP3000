@@ -1,6 +1,15 @@
-def tracking(tracker, input, frame, org_shape):
+import numpy as np
+def tracking(tracker, input, frame, org_shape, conf_threshold=0.6):
     # Reshaper fra (1,300,6) til (300,6)
-    data = input.reshape((300,6))
+    data = input.reshape((300, 6))
+
+    # filtrer ut detections under conf fra cfg
+    valid_mask = data[:, 4] > conf_threshold
+    data = data[valid_mask]
+
+    # ingen detections over conf_treshold
+    if len(data) == 0:
+        return
 
     # Resizer bilde til original bilde størrelse
     for det in data:
@@ -11,7 +20,4 @@ def tracking(tracker, input, frame, org_shape):
 
     # Tracker/legger faktisk på id til detections.
     tracker.update(data, frame)
-    # Deretter gjør det synlig ved å plotte bbox/stats på framen direkte.
     tracker.plot_results(frame, fontscale=1, show_lost=True, show_trajectories=False)
-
-
