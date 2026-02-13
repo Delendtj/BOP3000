@@ -4,10 +4,15 @@ import numpy as np
 # For å hente system resolution
 import tkinter as tk
 
+# Main program functions
+import functions.register_helmet
+from functions.register_helmet import register_helmet
+from functions.tracker import tracking
+
 # Egen utils
 from hardware_detector import HardwareDetector
 from inference import InferenceEngine
-from utilities.tracker import tracking
+
 
 # Til tracking
 from boxmot import BotSort
@@ -21,7 +26,7 @@ config = {
     'USE_FP16': True
 }
 
-data_path="DJI_20260207110850_0025_D.MP4"
+data_path="../videos/DJI_1.MP4"
 conf_threshold = 0.6
 input_size = 640
 
@@ -61,6 +66,11 @@ tracker = ByteTrack(reid_weights=Path('osnet_x0_25_msmt17.pt'), device='cpu', ha
 # Virker som mye mer setup og kompleks da, men tror det blir mer effetkivt.
 # SÅ pipeline blir å  detect_hjelm > OCR(detect_hjelm) > output_tall > REID(output_tall)
 # run_reid(tracker)
+
+# >>>TEST<<<
+# Digit classification pipeline.
+test_image = cv2.imread("../pictures/number215.png")
+register_helmet(test_image)
 
 frame_count = 0
 while cap.isOpened():
