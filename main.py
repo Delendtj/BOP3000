@@ -13,7 +13,6 @@ config = {
     'Model_PT_path': "models/best.pt",
 }
 
-
 INFERENCE_CONFIG = {
     'conf': 0.6,
     'iou': 0.45,  # NMS IOU threshold
@@ -25,7 +24,7 @@ INFERENCE_CONFIG = {
 }
 
 # Data
-data_path = "DJI_20260207110850_0025_D.MP4"
+data_path = "DJI_20260211183300_0036_D.MP4"
 
 
 detector = HardwareDetector(config)
@@ -111,7 +110,7 @@ while cap.isOpened():
         cv2.putText(frame, f"Detections: {len(detections)}", (10, 60),
                     cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
 
-
+    cv2.imshow('Yolo vision', frame)
     # ESC to quit
     if cv2.waitKey(1) & 0xFF == 27:
         break
