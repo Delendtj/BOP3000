@@ -12,17 +12,17 @@ vi bytter til dedicated models etter vi låser ned hardware requirements?
 
 
 #FP32 Dette er CPU Modell
-model.export(format='onnx', imgsz=640, simplify=True, half=False)
+model.export(format='onnx', imgsz=640, simplify=False, half=False)
 shutil.move('models/updated_model.onnx', 'models/model_fp32.onnx')
-'''
+
 #FP16 Moderne GPU med tensor cores
 model.export(format='onnx', imgsz=640, simplify=False, half=True, dynamic=False    )
 shutil.move('../models/best.onnx', '../models/model_fp16.onnx')
 
 '''
 #FP32 modell for CPU
-model.export(format='openvino', imgsz=640, simplify=True, half=False)
-
+model.export(format='openvino', imgsz=640, simplify=True,dynamic=False, half=False)
+'''
 #FP16 modell for intel gpu
-model.export(format='openvino', imgsz=640, simplify=True, half=True)
+model.export(format='openvino', imgsz=640, simplify=False, half=True)
 '''
