@@ -2,3 +2,4 @@ run/
 /datasets/updated-dataset-m-f.yolo26/
 .venv
 models/tensor_engine.engine
+test_digit_crop.pt
