@@ -1,27 +1,26 @@
-import os
-import sys
 import subprocess
-
-import numpy as np
+from ultralytics import YOLO
+from functions.tensor_loader import init_tensorrt
 
 
 class HardwareDetector:
     def __init__(self, config):
-
         self.config = config
         self.hardware_type = None
 
     def detect_hardware(self):
+        """Detect available hardware and choose the best backend."""
         if self._has_nvidia_gpu():
             self.hardware_type = 'cuda'
-            print("NVIDIA GPU, using TensorRT")
+            print("NVIDIA GPU detected, using CUDA/TensorRT")
             return 'cuda'
 
         self.hardware_type = 'openvino'
-        print("No NVIDIA GPU, using OpenVINO")
+        print("No NVIDIA GPU found, using OpenVINO")
         return 'openvino'
 
     def _has_nvidia_gpu(self):
+        """Return True if nvidia-smi reports at least one GPU."""
         try:
             result = subprocess.run(
                 ['nvidia-smi', '--query-gpu=name', '--format=csv,noheader'],
@@ -31,70 +30,56 @@ class HardwareDetector:
                 text=True
             )
             if result.returncode == 0 and result.stdout.strip():
-                gpu_name = result.stdout.strip()
-                print(f"  Found NVIDIA GPU: {gpu_name}")
+                print(f"  Found NVIDIA GPU: {result.stdout.strip()}")
                 return True
         except (FileNotFoundError, subprocess.TimeoutExpired):
             pass
-
         return False
 
     def initialize_model(self):
+        """Detect hardware (if not done yet) and return a ready-to-use model."""
         if self.hardware_type is None:
             self.detect_hardware()
 
         print(f"\nInitializing {self.hardware_type.upper()} model...")
 
         if self.hardware_type == 'cuda':
-            return self._init_tensorrt_model()
-        else:  # openvino
+            # All TensorRT logic now lives in tensor_loader.init_tensorrt.
+            # We just pass the config dict through — no path wrangling here.
+            return init_tensorrt(self.config)
+        else:
             return self._init_openvino_model()
 
-    def _init_tensorrt_model(self):
-        model_path = self.config['Model_Cuda_path']
-        engine_path = self.config['Tensor_engine_path']
-
-        if not engine_path.endswith('.engine'):
-            engine_path = f"{engine_path}.engine"
-
-        if not os.path.exists(model_path):
-            raise FileNotFoundError(f"ONNX model not found: {model_path}")
-
-        try:
-            import tensor_loader
-        except ImportError:
-            raise ImportError(
-                "Tensor_loader fil ikke funnet."
-            )
-
-        use_fp16 = self.config.get('USE_FP16', True)
-        # init tensorrt fra filen
-        trt_objects = tensor_loader.init_tensorrt(
-            onnx_path=model_path,
-            engine_path=engine_path,
-            use_fp16=use_fp16
-        )
-        print("  TensorRT initialized successfully")
-        return trt_objects
-
     def _init_openvino_model(self):
-        model_path = self.config['Model_OV_path']
-        if not os.path.exists(model_path):
-            raise FileNotFoundError(f"OpenVINO model not found: {model_path}")
-        try:
-            from openvino.runtime import Core
-        except ImportError:
-            raise ImportError(
-                "OpenVINO not installed. Install with:\n"
-                "pip install openvino"
-            )
-        print(f"  Loading model: {model_path}")
-        core = Core()
-        model = core.read_model(model_path)
-        devices = core.available_devices
-        device = 'GPU' if 'GPU' in devices else 'CPU'
-        compiled_model = core.compile_model(model, device)
-        print(f"  OpenVINO model loaded successfully on {device}")
-        return compiled_model
+        """Load a YOLO model for OpenVINO (Intel GPU/CPU) or fall back to PyTorch."""
+        ov_path = self.config.get('Model_OV_path', 'models/best_openvino_model')
+        pt_path = self.config.get('Model_PT_path', 'models/best.pt')
 
+        # Option 1: pre-exported OpenVINO model (fastest on Intel hardware)
+        if __import__('os').path.exists(ov_path):
+            try:
+                print(f"  Loading OpenVINO model: {ov_path}")
+                model = YOLO(ov_path, task='detect')
+                print("  ✓ OpenVINO model loaded successfully")
+                return model
+            except Exception as e:
+                print(f"  ✗ OpenVINO loading failed: {e}")
 
+        # Option 2: plain PyTorch weights — runs on CPU, no special export needed
+        if __import__('os').path.exists(pt_path):
+            print(f"  Loading PyTorch model (CPU fallback): {pt_path}")
+            model = YOLO(pt_path, task='detect')
+            print("  ✓ PyTorch model loaded")
+            return model
+
+        raise FileNotFoundError(
+            f"No model files found. Checked:\n"
+            f"  openvino : {ov_path}\n"
+            f"  pytorch  : {pt_path}"
+        )
+
+    def get_hardware_type(self):
+        """Return the detected hardware type, running detection if needed."""
+        if self.hardware_type is None:
+            self.detect_hardware()
+        return self.hardware_type

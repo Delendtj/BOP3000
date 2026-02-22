@@ -1,78 +1,62 @@
 import cv2
-import numpy as np
-
-# For å hente system resolution
 import tkinter as tk
+import supervision as sv
+from trackers import ByteTrackTracker
 
 # Main program functions
-import functions.register_helmet
-from functions.register_helmet import register_helmet
-from functions.tracker import tracking
-
-# Egen utils
+from functions.register_helmet import register_helmet, register_helmets
+from functions.BBExtractor import extract_helmet_box
 from hardware_detector import HardwareDetector
-from inference import InferenceEngine
-
-
-# Til tracking
-from boxmot import BotSort
-from boxmot import ByteTrack
-from pathlib import Path
 
 config = {
-    'Model_OV_path': "models/tuned_openvino/tuned_model.xml",
-    'Model_Cuda_path': "models/model_fp16.onnx",
-    'Tensor_engine_path': "models/tensor_engine",
-    'USE_FP16': True
+    'Model_OV_path': "models/best_openvino_model",
+    'Model_PT_path': "models/best.pt",
+    'Tensor_engine_path': "models/best.engine",
+    'USE_FP16': True,
+    'IMGSZ': 1280,
 }
 
-data_path="../videos/DJI_1.MP4"
+data_path = "DJI_20260214110313_0001_D.MP4"
 conf_threshold = 0.6
-input_size = 640
+frame_skip = 2
 
+INFERENCE_CONFIG = {
+    'conf': conf_threshold,
+    'iou': 0.45,
+    'max_det': 300,
+    'imgsz': 1280,
+    'half': True,
+    'device': 0,
+    'verbose': False,
+}
 
-#henter info om systemet og starter riktig modell backend
 detector = HardwareDetector(config)
 model = detector.initialize_model()
-engine = InferenceEngine(model, detector.hardware_type)
 
-# Dette er for å finne current system resolution size.
-# Kan få problemer for hvis man kjører med flere skjermer/scaled res.
+# Screen resolution for window sizing
 root = tk.Tk()
-
 system_width = root.winfo_screenwidth()
 system_height = root.winfo_screenheight()
+root.destroy()
 
 # Open video
 cap = cv2.VideoCapture(data_path)
-
-# Hvis systemets resolution er mindre enn video res så bruker vi system res.
-output_wind_height = system_height if system_height < int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))else int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-output_wind_width = system_width if system_width < int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) else int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+fps = cap.get(cv2.CAP_PROP_FPS)
+total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
 cv2.namedWindow('Yolo vision', cv2.WINDOW_NORMAL)
-cv2.resizeWindow('Yolo vision', output_wind_width, output_wind_height)
 
-# NOTE (til når vi skal adde OCR):
-# HVis vi går med å bruke dedikert kamera for REID så burde vi
-# bare gjøre OCR(hjelm)/REID på en viss del av input bildene, så ikke hele.
-# + ha store mellomrom mellom hver gang
-# (for hver N detection innenfor en spesifik del av bilde)
-
-# Vi kan bruke ByteTrack her også, merket at det gikk litt raskere.
-tracker = ByteTrack(reid_weights=Path('osnet_x0_25_msmt17.pt'), device='cpu', half=False, track_high_thresh=0.65)
-
-# Tror vi ender opp med å må kjøre REID på en egen thread på en cropped detection/hjelmnummer.
-# Virker som mye mer setup og kompleks da, men tror det blir mer effetkivt.
-# SÅ pipeline blir å  detect_hjelm > OCR(detect_hjelm) > output_tall > REID(output_tall)
-# run_reid(tracker)
-
-# >>>TEST<<<
-# Digit classification pipeline.
-test_image = cv2.imread("../pictures/number215.png")
-register_helmet(test_image)
+# Initialize tracker
+# BoxAnnotator draws the bounding boxes, LabelAnnotator draws the track ID.
+tracker = ByteTrackTracker()
+box_annotator = sv.BoxAnnotator()
+label_annotator = sv.LabelAnnotator()
 
 frame_count = 0
+helmet_saved = False
+
+last_detections = sv.Detections.empty()
+
 while cap.isOpened():
     ret, frame = cap.read()
     if not ret:
@@ -80,34 +64,60 @@ while cap.isOpened():
 
     frame_count += 1
 
-    # Lagre original shape for å sette riktig bbox senere.
-    org_shape = frame.shape
+    if frame_count % frame_skip == 0:
+        result = model(
+            frame,
+            conf=INFERENCE_CONFIG['conf'],
+            iou=INFERENCE_CONFIG['iou'],
+            max_det=INFERENCE_CONFIG['max_det'],
+            imgsz=INFERENCE_CONFIG['imgsz'],
+            half=INFERENCE_CONFIG['half'],
+            device=INFERENCE_CONFIG['device'],
+            verbose=INFERENCE_CONFIG['verbose']
+        )[0]
 
-    # Preprocess: resize to 640x640
-    resized = cv2.resize(frame, (640, 640))
+        # Convert YOLO output to a standardized sv.Detections object.
+        detections = sv.Detections.from_ultralytics(result)
+        print(f"Frame {frame_count}: YOLO found {len(detections)} boxes")
 
-    # Convert to model input format
-    rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
-    normalized = rgb.astype(np.float32) / 255.0
-    input_data = np.transpose(normalized, (2, 0, 1))
+        # Update tracker — it attaches a tracker_id to each detection in-place.
+        detections = tracker.update(detections)
 
-    input_data_batched = np.expand_dims(input_data, axis=0)
+        if len(detections) > 0:
+            last_detections = detections
+        else:
+            # On skipped frames, still call the tracker with empty detections
+            updated = tracker.update(sv.Detections.empty())
+            print(f"Skipped frame tracker output: {len(updated)} detections, "
+                  f"tracker_id: {updated.tracker_id}")
 
-    # DETTE KJØRER INFERENCE
-    output = engine.run(input_data_batched)
 
-    # Dette er formatet output kommer i
-    print(f"Shape: {output.shape}")
-    print(f"Value: {output[0, 0, :]}")
 
-    # Legg til tracking id på output. adda conf treshold for å vise kun over confidence i cfg
-    tracking(tracker, output, frame, org_shape, conf_threshold)
+        if not helmet_saved and len(detections) > 0:
+            det_numpy = detections.xyxy
+            import numpy as np
+            det_full = np.column_stack([
+                det_numpy,
+                detections.confidence,
+                detections.class_id
+            ])
+            helmets = extract_helmet_box(det_full, frame)
+            if len(helmets) > 0:
+                helmet_results = register_helmets(helmets, debug=False)
+                for h in helmet_results:
+                    print(f"Helmet {h['bbox']}: Number={h['helmet_number']}, "
+                          f"OCR confidence={h['ocr_conf']:.1f}%")
+                helmet_saved = True
 
-    cv2.imshow('Yolo vision', frame)
+    # Always annotate using last_detection
+    annotated = box_annotator.annotate(frame, last_detections)
+    if last_detections.tracker_id is not None:
+        labels = [str(tid) for tid in last_detections.tracker_id]
+        annotated = label_annotator.annotate(annotated, last_detections, labels=labels)
 
-    # Hvis de siste 8 bitsa utgjør tallet 27
-    # De siste 8 bitsa representerer ASCII tegnet
-    # Der 27 = ESC
+    display_frame = cv2.resize(annotated, (1920, 1080))
+    cv2.imshow('Yolo vision', display_frame)
+
     if cv2.waitKey(1) & 0xFF == 27:
         break
 
