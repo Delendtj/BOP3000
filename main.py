@@ -4,7 +4,7 @@ import supervision as sv
 from trackers import ByteTrackTracker
 
 # Main program functions
-from functions.register_helmet import register_helmet, register_helmets
+from functionhs.register_helmet import register_helmet, register_helmets
 from functions.BBExtractor import extract_helmet_box
 from hardware_detector import HardwareDetector
 
