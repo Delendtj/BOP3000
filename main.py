@@ -4,25 +4,25 @@ import supervision as sv
 from trackers import ByteTrackTracker
 
 # Main program functions
-from functionhs.register_helmet import register_helmet, register_helmets
+from functions.register_helmet import register_helmet
 from functions.BBExtractor import extract_helmet_box
 from hardware_detector import HardwareDetector
 
 config = {
     'Model_OV_path': "models/best_openvino_model",
-    'Model_PT_path': "models/best.pt",
-    'Tensor_engine_path': "models/best.engine",
+    'Model_PT_path': "models/1280.pt",
+    'Tensor_engine_path': "models/1280.engine",
     'USE_FP16': True,
     'IMGSZ': 1280,
 }
 
-data_path = "DJI_20260214110313_0001_D.MP4"
-conf_threshold = 0.6
-frame_skip = 2
+data_path = "DJI_20260211182952_0004_D.MP4"
+conf_threshold = 0.3
+frame_skip = 1
 
 INFERENCE_CONFIG = {
     'conf': conf_threshold,
-    'iou': 0.45,
+    'iou': 0.5,
     'max_det': 300,
     'imgsz': 1280,
     'half': True,
@@ -48,7 +48,7 @@ cv2.namedWindow('Yolo vision', cv2.WINDOW_NORMAL)
 
 # Initialize tracker
 # BoxAnnotator draws the bounding boxes, LabelAnnotator draws the track ID.
-tracker = ByteTrackTracker()
+tracker = ByteTrackTracker(lost_track_buffer=150)
 box_annotator = sv.BoxAnnotator()
 label_annotator = sv.LabelAnnotator()
 
@@ -76,22 +76,44 @@ while cap.isOpened():
             verbose=INFERENCE_CONFIG['verbose']
         )[0]
 
-        # Convert YOLO output to a standardized sv.Detections object.
+
         detections = sv.Detections.from_ultralytics(result)
         print(f"Frame {frame_count}: YOLO found {len(detections)} boxes")
 
-        # Update tracker — it attaches a tracker_id to each detection in-place.
-        detections = tracker.update(detections)
+        PERSON_CLASS_ID = 1
+        HELMET_CLASS_ID = 0
 
-        if len(detections) > 0:
-            last_detections = detections
-        else:
-            # On skipped frames, still call the tracker with empty detections
-            updated = tracker.update(sv.Detections.empty())
-            print(f"Skipped frame tracker output: {len(updated)} detections, "
-                  f"tracker_id: {updated.tracker_id}")
+        people_detections = detections[detections.class_id == PERSON_CLASS_ID]
+        helmet_detections = detections[detections.class_id == HELMET_CLASS_ID]
+
+        people_for_tracker = people_detections[people_detections.confidence > 0.3]
+        last_detections = tracker.update(people_for_tracker)
+    else:
+        pass
 
 
+    annotated = box_annotator.annotate(frame, last_detections)
+    if len(last_detections) > 0:
+        labels = []
+        for i, tid in enumerate(last_detections.tracker_id):
+            if last_detections.confidence[i] == 0:
+                labels.append(f"ID {tid} (pred)")
+            else:
+                labels.append(f"ID {tid}")
+
+        annotated = label_annotator.annotate(annotated, last_detections, labels=labels)
+
+    display_frame = cv2.resize(annotated, (1920, 1080))
+    cv2.imshow('Yolo vision', display_frame)
+
+    if cv2.waitKey(1) & 0xFF == 27:
+        break
+
+cap.release()
+cv2.destroyAllWindows()
+
+
+"""
 
         if not helmet_saved and len(detections) > 0:
             det_numpy = detections.xyxy
@@ -108,18 +130,4 @@ while cap.isOpened():
                     print(f"Helmet {h['bbox']}: Number={h['helmet_number']}, "
                           f"OCR confidence={h['ocr_conf']:.1f}%")
                 helmet_saved = True
-
-    # Always annotate using last_detection
-    annotated = box_annotator.annotate(frame, last_detections)
-    if last_detections.tracker_id is not None:
-        labels = [str(tid) for tid in last_detections.tracker_id]
-        annotated = label_annotator.annotate(annotated, last_detections, labels=labels)
-
-    display_frame = cv2.resize(annotated, (1920, 1080))
-    cv2.imshow('Yolo vision', display_frame)
-
-    if cv2.waitKey(1) & 0xFF == 27:
-        break
-
-cap.release()
-cv2.destroyAllWindows()
+"""

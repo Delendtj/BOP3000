@@ -2,7 +2,7 @@ import cv2
 import torch
 from PIL import Image
 import pytesseract
-
+pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
 #############################################################################
 # OLD STUFF
 # Model som brukes: https://huggingface.co/edadaltocg/resnet34_svhn
@@ -22,18 +22,57 @@ import pytesseract
 # Threshold, vi upscaler alt under dette
 UPSCALE_THRESH = 60
 
-def register_helmet(image):
-    processed_img =  preprocess_image(image)
+def register_helmet(helmets, debug=False):
+    """
+    Process a list of helmet dicts (from BBExtractor) and return OCR results.
 
-    # psm = 7 (bilde blir håndtert som et single line tekst.
-    # Whitelist: tall fra 0-9
-    output = pytesseract.image_to_string(processed_img, lang="eng", config="--psm 7 -c tessedit_char_whitelist=0123456789")
-    print("Tesseract output: ", output)
+    Each dict in `helmets` must have keys: 'image', 'bbox', 'conf'.
+    Returns a list of dicts with keys: 'bbox', 'helmet_number', 'ocr_conf'.
+    """
+    results = []
+
+    for helmet in helmets:
+        img   = helmet['image']   # numpy array (BGR crop)
+        bbox  = helmet['bbox']
+        conf  = helmet['conf']
+
+        processed_img = preprocess_image(img, debug=debug)
+
+        # psm 7: treat image as a single line of text.
+        # Whitelist: digits only.
+        raw = pytesseract.image_to_data(
+            processed_img,
+            lang="eng",
+            config="--psm 7 -c tessedit_char_whitelist=0123456789",
+            output_type=pytesseract.Output.DICT
+        )
+
+        # Collect all recognised digit strings and their confidence scores.
+        number_str = ""
+        ocr_conf   = 0.0
+        valid      = [(t, c) for t, c in zip(raw['text'], raw['conf'])
+                      if t.strip() and int(c) > 0]
+
+        if valid:
+            texts, confs = zip(*valid)
+            number_str = "".join(texts).strip()
+            ocr_conf   = sum(int(c) for c in confs) / len(confs)
+
+        if debug:
+            print(f"Tesseract raw text: {number_str!r}  conf: {ocr_conf:.1f}%")
+
+        results.append({
+            'bbox':          bbox,
+            'helmet_number': number_str,
+            'ocr_conf':      ocr_conf,
+        })
+
+    return results
 
 
 
 # Preprocessing av input
-def preprocess_image(image):
+def preprocess_image(image, debug=False):
 
     # Konverter til GrayScale
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
@@ -58,9 +97,10 @@ def preprocess_image(image):
     output = sharpened
 
     # Vis fram for debugging
-    cv2.imshow("image", output)
-    cv2.waitKey(0)
-    cv2.destroyAllWindows()
+    if debug:
+        cv2.imshow("image", output)
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
 
     return output
 
@@ -144,4 +184,3 @@ def digit_ocr(img):
     confidence = conf.item()
 
     return label, confidence
-

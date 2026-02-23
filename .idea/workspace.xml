@@ -4,28 +4,14 @@
     <option name="autoReloadType" value="SELECTIVE" />
   </component>
   <component name="ChangeListManager">
-    <list default="true" id="07fd18cc-2bca-4a2f-80af-2f0d24b97d14" name="Changes" comment="changed backend to YOLO from RAW">
-      <change beforePath="$PROJECT_DIR$/.idea/Project.iml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/Project.iml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/misc.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/misc.xml" afterDir="false" />
+    <list default="true" id="07fd18cc-2bca-4a2f-80af-2f0d24b97d14" name="Changes" comment="Merge remote-tracking branch 'origin/yolobackend'&#10;&#10;viktig: &#10;Backend er bytta til YOLO&#10;Trackers fra Roboflow istedenfor boxmot&#10;Modell input fra 640 - 1280 (kanbskje 1920?)&#10;fjerna BBE og OCR funksjon atm">
+      <change afterPath="$PROJECT_DIR$/models/1280.pt" afterDir="false" />
+      <change afterPath="$PROJECT_DIR$/models/best640.pt" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/functions/BBExtractor.py" beforeDir="false" afterPath="$PROJECT_DIR$/functions/BBExtractor.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/functions/inference.py" beforeDir="false" />
       <change beforePath="$PROJECT_DIR$/functions/register_helmet.py" beforeDir="false" afterPath="$PROJECT_DIR$/functions/register_helmet.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/functions/tensor_loader.py" beforeDir="false" afterPath="$PROJECT_DIR$/functions/tensor_loader.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/hardware_detector.py" beforeDir="false" afterPath="$PROJECT_DIR$/hardware_detector.py" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/main.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/models/annotatedmodel/my_model.pt" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/models/annotatedmodel/train/args.yaml" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/models/annotatedmodel/train/labels.jpg" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/models/annotatedmodel/train/results.csv" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/models/annotatedmodel/train/train_batch0.jpg" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/models/annotatedmodel/train/train_batch1.jpg" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/models/annotatedmodel/train/train_batch2.jpg" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/models/annotatedmodel/train/weights/best.pt" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/models/annotatedmodel/train/weights/last.pt" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/models/model_fp16.onnx" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/models/tuned_model.pt" beforeDir="false" afterPath="$PROJECT_DIR$/models/best.pt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/models/updated_model.pt" beforeDir="false" />
+      <change beforePath="$PROJECT_DIR$/models/best.pt" beforeDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
@@ -40,6 +26,11 @@
     </option>
   </component>
   <component name="Git.Settings">
+    <option name="PREVIOUS_COMMIT_AUTHORS">
+      <list>
+        <option value="Dennis L &lt;dennis.lendi@gmail.com&gt;" />
+      </list>
+    </option>
     <option name="RECENT_BRANCH_BY_REPOSITORY">
       <map>
         <entry key="$PROJECT_DIR$" value="main" />
@@ -94,7 +85,7 @@
     "SHARE_PROJECT_CONFIGURATION_FILES": "true",
     "ai.playground.ignore.import.keys.banner.in.settings": "true",
     "git-widget-placeholder": "main",
-    "last_opened_file_path": "C:/Users/Dennis/Desktop/python/BOP3000/models",
+    "last_opened_file_path": "C:/Users/Dennis/Desktop/python/BOP3000",
     "node.js.selected.package.tslint": "(autodetect)",
     "nodejs_package_manager_path": "npm",
     "settings.editor.selected.configurable": "com.jetbrains.python.configuration.PyActiveSdkModuleConfigurable",
@@ -103,8 +94,8 @@
 }]]></component>
   <component name="RecentsManager">
     <key name="CopyFile.RECENT_KEYS">
-      <recent name="C:\Users\Dennis\Desktop\python\BOP3000\models" />
       <recent name="C:\Users\Dennis\Desktop\python\BOP3000" />
+      <recent name="C:\Users\Dennis\Desktop\python\BOP3000\models" />
       <recent name="C:\Users\denni\Desktop\Python\SpeedSkate" />
       <recent name="C:\Users\denni\Desktop\Python\SpeedSkate\models" />
       <recent name="C:\Users\Dennis\Desktop\python\bop3000\models" />
@@ -189,8 +180,8 @@
   <component name="SharedIndexes">
     <attachedChunks>
       <set>
-        <option value="bundled-js-predefined-d6986cc7102b-9b0f141eb926-JavaScript-PY-253.30387.173" />
-        <option value="bundled-python-sdk-4762d8aabb82-6d6dccd035ac-com.jetbrains.pycharm.pro.sharedIndexes.bundled-PY-253.30387.173" />
+        <option value="bundled-js-predefined-d6986cc7102b-9b0f141eb926-JavaScript-PY-253.31033.139" />
+        <option value="bundled-python-sdk-2653e85de345-6d6dccd035ac-com.jetbrains.pycharm.pro.sharedIndexes.bundled-PY-253.31033.139" />
       </set>
     </attachedChunks>
   </component>
@@ -224,7 +215,9 @@
       <workItem from="1770975334557" duration="14775000" />
       <workItem from="1771760015614" duration="753000" />
       <workItem from="1771763554982" duration="1629000" />
-      <workItem from="1771765283851" duration="9740000" />
+      <workItem from="1771765283851" duration="10078000" />
+      <workItem from="1771775914195" duration="230000" />
+      <workItem from="1771858103712" duration="11616000" />
     </task>
     <task id="LOCAL-00001" summary="Added Trained model">
       <option name="closed" value="true" />
@@ -274,7 +267,14 @@
       <option name="project" value="LOCAL" />
       <updated>1770983305295</updated>
     </task>
-    <option name="localTasksCounter" value="7" />
+    <task id="LOCAL−00007" summary="Merge remote-tracking branch 'origin/yolobackend'&#10;&#10;viktig: &#10;Backend er bytta til YOLO&#10;Trackers fra Roboflow istedenfor boxmot&#10;Modell input fra 640 - 1280 (kanbskje 1920?)&#10;fjerna BBE og OCR funksjon atm">
+      <option name="closed" value="true" />
+      <created>1771775738775</created>
+      <option name="number" value="LOCAL−00007" />
+      <option name="presentableId" value="LOCAL−00007" />
+      <updated>1771775738775</updated>
+    </task>
+    <option name="localTasksCounter" value="8" />
     <servers />
   </component>
   <component name="TypeScriptGeneratedFilesManager">
@@ -298,15 +298,18 @@
     <MESSAGE value="added cv2 to requirements.txt" />
     <MESSAGE value="Refactored file structure, stashed deprecated code, added Hardware_Detector.py and Tensor_loader.py." />
     <MESSAGE value="changed backend to YOLO from RAW" />
-    <option name="LAST_COMMIT_MESSAGE" value="changed backend to YOLO from RAW" />
+    <MESSAGE value="Merge remote-tracking branch 'origin/yolobackend'&#10;&#10;# Conflicts:&#10;#&#9;.idea/Project.iml&#10;#&#9;.idea/misc.xml&#10;#&#9;.idea/workspace.xml&#10;#&#9;main.py" />
+    <MESSAGE value="Merge remote-tracking branch 'origin/yolobackend'&#10;&#10;viktig: &#10;Backend er bytta til YOLO&#10;Trackers fra Roboflow istedenfor boxmot&#10;Modell input fra 640 - 1280 (kanbskje 1920?)&#10;fjerna BBE og OCR funksjon atm" />
+    <MESSAGE value="Merge pull request #10 from Delendtj/mine-endringer&#10;&#10;Add setup dependencies integration" />
+    <option name="LAST_COMMIT_MESSAGE" value="" />
   </component>
   <component name="com.intellij.coverage.CoverageDataManagerImpl">
-    <SUITE FILE_PATH="coverage/SpeedSkate$main.coverage" NAME="main Coverage Results" MODIFIED="1770992427728" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
     <SUITE FILE_PATH="coverage/bop3000$test.coverage" NAME="test Coverage Results" MODIFIED="1770905772857" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
+    <SUITE FILE_PATH="coverage/SpeedSkate$main.coverage" NAME="main Coverage Results" MODIFIED="1770992427728" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
     <SUITE FILE_PATH="coverage/SpeedSkate$main_openvino.coverage" NAME="main_openvino Coverage Results" MODIFIED="1769767686322" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
     <SUITE FILE_PATH="coverage/BOP3000$register_helmet.coverage" NAME="register_helmet Coverage Results" MODIFIED="1771768771036" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/functions" />
     <SUITE FILE_PATH="coverage/SpeedSkate$Hardware_Detector.coverage" NAME="Hardware_Detector Coverage Results" MODIFIED="1769516971158" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
-    <SUITE FILE_PATH="coverage/BOP3000$main.coverage" NAME="main Coverage Results" MODIFIED="1771775015847" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
+    <SUITE FILE_PATH="coverage/BOP3000$main.coverage" NAME="main Coverage Results" MODIFIED="1771871388208" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
     <SUITE FILE_PATH="coverage/bop3000$Model_converter.coverage" NAME="Model converter Coverage Results" MODIFIED="1769347466605" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
     <SUITE FILE_PATH="coverage/SpeedSkate$BBExtractor.coverage" NAME="BBExtractor Coverage Results" MODIFIED="1770992217418" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/functions" />
     <SUITE FILE_PATH="coverage/BOP3000$model_converter.coverage" NAME="model_converter Coverage Results" MODIFIED="1771775348488" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/utilities" />
@@ -318,6 +321,7 @@
     <SUITE FILE_PATH="coverage/bop3000$Main_ONNX_CUDA.coverage" NAME="Main ONNX_CUDA Coverage Results" MODIFIED="1769347351598" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
     <SUITE FILE_PATH="coverage/bop3000$compare.coverage" NAME="compare Coverage Results" MODIFIED="1769347015739" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
     <SUITE FILE_PATH="coverage/bop3000$model_converter.coverage" NAME="model_converter Coverage Results" MODIFIED="1770905804642" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/utilities" />
+    <SUITE FILE_PATH="coverage/BOP3000$compare.coverage" NAME="compare Coverage Results" MODIFIED="1771867105577" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$/utilities" />
     <SUITE FILE_PATH="coverage/bop3000$main.coverage" NAME="main Coverage Results" MODIFIED="1770910968836" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
     <SUITE FILE_PATH="coverage/SpeedSkate$new.coverage" NAME="new Coverage Results" MODIFIED="1769171422118" SOURCE_PROVIDER="com.intellij.coverage.DefaultCoverageFileProvider" RUNNER="coverage.py" COVERAGE_BY_TEST_ENABLED="false" COVERAGE_TRACING_ENABLED="false" WORKING_DIRECTORY="$PROJECT_DIR$" />
   </component>

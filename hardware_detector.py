@@ -44,8 +44,6 @@ class HardwareDetector:
         print(f"\nInitializing {self.hardware_type.upper()} model...")
 
         if self.hardware_type == 'cuda':
-            # All TensorRT logic now lives in tensor_loader.init_tensorrt.
-            # We just pass the config dict through — no path wrangling here.
             return init_tensorrt(self.config)
         else:
             return self._init_openvino_model()
@@ -55,7 +53,7 @@ class HardwareDetector:
         ov_path = self.config.get('Model_OV_path', 'models/best_openvino_model')
         pt_path = self.config.get('Model_PT_path', 'models/best.pt')
 
-        # Option 1: pre-exported OpenVINO model (fastest on Intel hardware)
+
         if __import__('os').path.exists(ov_path):
             try:
                 print(f"  Loading OpenVINO model: {ov_path}")
@@ -65,7 +63,7 @@ class HardwareDetector:
             except Exception as e:
                 print(f"  ✗ OpenVINO loading failed: {e}")
 
-        # Option 2: plain PyTorch weights — runs on CPU, no special export needed
+
         if __import__('os').path.exists(pt_path):
             print(f"  Loading PyTorch model (CPU fallback): {pt_path}")
             model = YOLO(pt_path, task='detect')
