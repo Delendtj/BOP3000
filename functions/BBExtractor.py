@@ -13,7 +13,7 @@ def extract_helmet_box(det, frame , min_size=32):
 
     cropped_img = []
     for dets in class_0_valid_dets:
-        x1, y1, x2, y2, conf, cls = dets
+        x1, y1, x2, y2, conf, cls, track_id = dets
 
         #konverter til int
         x1, y1, x2, y2 = int(x1), int(y1), int(x2), int(y2)
@@ -23,8 +23,8 @@ def extract_helmet_box(det, frame , min_size=32):
         y2 = min(frame.shape[0], y2)
 
         # skip cropping og printing hvis detectionen er mindre enn min_size
-        if (x2 - x1) < min_size or y2 - y1 < min_size:
-            continue
+        #if (x2 - x1) < min_size or y2 - y1 < min_size:
+        #    continue
 
 
         cropped = frame[y1:y2, x1:x2].copy()
@@ -32,7 +32,8 @@ def extract_helmet_box(det, frame , min_size=32):
         cropped_img.append({
             'image': cropped,
             'bbox': (x1, y1, x2, y2),
-            'conf': conf
+            'conf': conf,
+            'track_id': track_id,
         })
 
     return cropped_img
