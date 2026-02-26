@@ -2,6 +2,7 @@ import cv2
 import os
 import time
 import tkinter as tk
+
 import numpy as np
 import supervision as sv
 from trackers import ByteTrackTracker
@@ -10,7 +11,7 @@ from collections import defaultdict, Counter
 # Main program functions
 from functions.register_helmet import register_helmet
 from functions.BBExtractor import extract_helmet_box
-from functions.roi import load_roi, save_roi
+from functions.roi import load_roi, save_roi, select_roi
 from hardware_detector import HardwareDetector
 
 config = {
@@ -35,7 +36,7 @@ INFERENCE_CONFIG = {
     'verbose': False,
 }
 
-ROI_PATH = os.path.join("Img", "detection_roi.json")
+ROI_PATH = os.path.join("img", "detection_roi.json")
 
 detector = HardwareDetector(config)
 model = detector.initialize_model()
@@ -56,10 +57,9 @@ if not ret:
 
 roi = load_roi(ROI_PATH)
 if roi is None:
-    candidate = preview_frame
-    if candidate:
-        save_roi(ROI_PATH, candidate)
-        roi = candidate
+    roi = select_roi(preview_frame)
+    if roi is not None:
+        save_roi(ROI_PATH, roi)
 cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
 
 cv2.namedWindow('Yolo vision', cv2.WINDOW_NORMAL)
@@ -74,6 +74,7 @@ label_annotator = sv.LabelAnnotator()
 frame_count = 0
 helmet_saved = False
 
+last_detections = sv.Detections.empty()
 prev_frame_time = None
 fps_ema = 0.0
 
@@ -237,8 +238,8 @@ while cap.isOpened():
     if key == 27:
         break
     if key == ord("r"):
-        new_roi = frame
-        if new_roi:
+        new_roi = select_roi(frame)
+        if new_roi is not None:
             roi = new_roi
             save_roi(ROI_PATH, roi)
 
