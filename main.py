@@ -1,13 +1,16 @@
 import cv2
+import os
+import time
 import tkinter as tk
-import supervision as sv
 import numpy as np
+import supervision as sv
 from trackers import ByteTrackTracker
 from collections import defaultdict, Counter
 
 # Main program functions
 from functions.register_helmet import register_helmet
 from functions.BBExtractor import extract_helmet_box
+from functions.roi import load_roi, save_roi
 from hardware_detector import HardwareDetector
 
 config = {
@@ -32,6 +35,8 @@ INFERENCE_CONFIG = {
     'verbose': False,
 }
 
+ROI_PATH = os.path.join("Img", "detection_roi.json")
+
 detector = HardwareDetector(config)
 model = detector.initialize_model()
 
@@ -45,6 +50,17 @@ root.destroy()
 cap = cv2.VideoCapture(data_path)
 fps = cap.get(cv2.CAP_PROP_FPS)
 total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+ret, preview_frame = cap.read()
+if not ret:
+    raise RuntimeError("Could not read initial frame for ROI.")
+
+roi = load_roi(ROI_PATH)
+if roi is None:
+    candidate = preview_frame
+    if candidate:
+        save_roi(ROI_PATH, candidate)
+        roi = candidate
+cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
 
 cv2.namedWindow('Yolo vision', cv2.WINDOW_NORMAL)
 
@@ -58,7 +74,10 @@ label_annotator = sv.LabelAnnotator()
 frame_count = 0
 helmet_saved = False
 
-# Init
+prev_frame_time = None
+fps_ema = 0.0
+
+# Init trackers
 people_tracks = sv.Detections.empty()
 helmet_tracks = sv.Detections.empty()
 processed_tracker_ids = set()
@@ -88,7 +107,7 @@ while cap.isOpened():
 
 
         detections = sv.Detections.from_ultralytics(result)
-        # print(f"Frame {frame_count}: YOLO found {len(detections)} boxes")
+
 
         PERSON_CLASS_ID = 1
         HELMET_CLASS_ID = 0
@@ -183,11 +202,45 @@ while cap.isOpened():
 
         annotated = label_annotator.annotate(annotated, helmet_tracks, labels=labels)
 
+    if roi is not None:
+        cv2.polylines(
+            annotated,
+            [np.array(roi, dtype=np.int32)],
+            True,
+            (0, 255, 255),
+            2,
+        )
+
+    now = time.perf_counter()
+    if prev_frame_time is not None:
+        elapsed = now - prev_frame_time
+        if elapsed > 0:
+            fps_inst = 1.0 / elapsed
+            fps_ema = fps_inst if fps_ema <= 0 else (0.9 * fps_ema + 0.1 * fps_inst)
+    prev_frame_time = now
+
+    fps_text = f"FPS: {fps_ema:.1f}" if fps_ema > 0 else "FPS: --"
+    cv2.putText(
+        annotated,
+        fps_text,
+        (10, 30),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.8,
+        (0, 255, 255),
+        2,
+    )
+
     display_frame = cv2.resize(annotated, (1920, 1080))
     cv2.imshow('Yolo vision', display_frame)
 
-    if cv2.waitKey(1) & 0xFF == 27:
+    key = cv2.waitKey(1) & 0xFF
+    if key == 27:
         break
+    if key == ord("r"):
+        new_roi = frame
+        if new_roi:
+            roi = new_roi
+            save_roi(ROI_PATH, roi)
 
 cap.release()
 cv2.destroyAllWindows()
