@@ -10,7 +10,7 @@ from trackers import ByteTrackTracker
 # Main program functions
 from functions.register_helmet import register_helmet
 from functions.BBExtractor import extract_helmet_box
-from functions.roi import load_roi, save_roi
+from functions.roi import load_roi, save_roi, select_roi
 from hardware_detector import HardwareDetector
 
 config = {
@@ -35,7 +35,7 @@ INFERENCE_CONFIG = {
     'verbose': False,
 }
 
-ROI_PATH = os.path.join("Img", "detection_roi.json")
+ROI_PATH = os.path.join("img", "detection_roi.json")
 
 detector = HardwareDetector(config)
 model = detector.initialize_model()
@@ -56,10 +56,9 @@ if not ret:
 
 roi = load_roi(ROI_PATH)
 if roi is None:
-    candidate = preview_frame
-    if candidate:
-        save_roi(ROI_PATH, candidate)
-        roi = candidate
+    roi = select_roi(preview_frame)
+    if roi is not None:
+        save_roi(ROI_PATH, roi)
 cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
 
 cv2.namedWindow('Yolo vision', cv2.WINDOW_NORMAL)
@@ -158,8 +157,8 @@ while cap.isOpened():
     if key == 27:
         break
     if key == ord("r"):
-        new_roi = frame
-        if new_roi:
+        new_roi = select_roi(frame)
+        if new_roi is not None:
             roi = new_roi
             save_roi(ROI_PATH, roi)
 

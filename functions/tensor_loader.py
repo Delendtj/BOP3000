@@ -1,4 +1,6 @@
 import os
+
+from click.core import batch
 from ultralytics import YOLO
 
 def init_tensorrt(config):
@@ -26,7 +28,13 @@ def init_tensorrt(config):
             print("  This will take several minutes — TensorRT is profiling for your GPU...")
             model = YOLO(pt_path, task='detect')
             # Pass imgsz here so the engine is built for the right input size
-            model.export(format='engine', half=use_fp16, simplify=True, imgsz=imgsz)
+            model.export(format='engine',
+                         half=use_fp16,
+                         simplify=True,
+                         workspace=8,
+                         batch=1,
+                         dynamic=False,
+                         imgsz=imgsz)
 
             model = YOLO(engine_path, task='detect')
             print("  ✓ TensorRT engine built and loaded successfully")
