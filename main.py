@@ -27,6 +27,8 @@ DATA_PATH = "../videos/DJI_CUT.MP4"
 CONF_THRESHOLD = 0.3
 FRAME_SKIP = 1
 OCR_FRAMES = 3          # collect votes for N frames before deciding
+# INSERT ACTUAL FORMULA HERE
+NUMBER_OF_THREADS = 2
 
 INFERENCE_CONFIG = {
     'conf': CONF_THRESHOLD,
