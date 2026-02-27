@@ -1,5 +1,7 @@
 run/
 /datasets/updated-dataset-m-f.yolo26/
 .venv
+.idea/
+.__pycache__/
 models/tensor_engine.engine
 test_digit_crop.pt

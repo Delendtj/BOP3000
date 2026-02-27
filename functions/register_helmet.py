@@ -1,26 +1,20 @@
 import cv2
-import torch
-from PIL import Image
-import pytesseract
-pytesseract.pytesseract.tesseract_cmd = r'C:\Program Files\Tesseract-OCR\tesseract.exe'
-#############################################################################
-# OLD STUFF
-# Model som brukes: https://huggingface.co/edadaltocg/resnet34_svhn
+import os
 
-# Gjør klar modellen
-#model = timm.create_model("resnet34_svhn", pretrained=True)
-#model.eval() #Sett den fra .train() til eval() mode
-#model.zero_grad(set_to_none=True) # Skru av gardients for bedre memory optimization
+os.environ["PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK"] = "True"
+os.environ["FLAGS_use_mkldnn"] = "0"
+os.environ["FLAGS_enable_pir_in_executor"] = "0"
 
-#config = timm.data.resolve_data_config(model=model)
-
-# Transform bilde til det modellen forventer
-# config er et dict som vi henter alle keywordsa som holde på settings
-#tr = timm.data.create_transform(**config)
-#############################################################################
+from paddleocr import PaddleOCR
 
 # Threshold, vi upscaler alt under dette
 UPSCALE_THRESH = 60
+
+_ocr = PaddleOCR(
+    use_doc_orientation_classify=False,
+    use_doc_unwarping=False,
+    use_textline_orientation=False
+)
 
 def register_helmet(helmets, debug=False):
     """
@@ -35,41 +29,67 @@ def register_helmet(helmets, debug=False):
         img   = helmet['image']   # numpy array (BGR crop)
         bbox  = helmet['bbox']
         conf  = helmet['conf']
+        tid = helmet['track_id']
+
+        if tid == -1: continue
 
         processed_img = preprocess_image(img, debug=debug)
 
-        # psm 7: treat image as a single line of text.
-        # Whitelist: digits only.
-        raw = pytesseract.image_to_data(
-            processed_img,
-            lang="eng",
-            config="--psm 7 -c tessedit_char_whitelist=0123456789",
-            output_type=pytesseract.Output.DICT
-        )
+        if debug:
+            print("Running OCR...")
+            print("Input shape: ", img.shape)
+            print("Input shape after processing: ", img.shape)
 
-        # Collect all recognised digit strings and their confidence scores.
+        raw = _ocr.predict(processed_img)
+
+        # Collect recognized text and confidence, then keep digits only.
         number_str = ""
         ocr_conf   = 0.0
-        valid      = [(t, c) for t, c in zip(raw['text'], raw['conf'])
-                      if t.strip() and int(c) > 0]
+        valid_texts = []
+        valid_confs = []
 
-        if valid:
-            texts, confs = zip(*valid)
-            number_str = "".join(texts).strip()
-            ocr_conf   = sum(int(c) for c in confs) / len(confs)
+        for res in raw:
+            if isinstance(res, dict):
+                rec_texts = res.get("rec_texts") or []
+                rec_scores = res.get("rec_scores") or []
+            else:
+                rec_texts = getattr(res, "rec_texts", []) or []
+                rec_scores = getattr(res, "rec_scores", []) or []
+
+            for text, score in zip(rec_texts, rec_scores):
+                text = str(text).strip()
+                if not text:
+                    continue
+                # Filter out non digit characters
+                digits = "".join(ch for ch in text if ch.isdigit())
+                if not digits:
+                    continue
+                valid_texts.append(digits)
+                valid_confs.append(float(score))
+
+
+
+        if valid_texts:
+            number_str = "".join(valid_texts).strip()
+            ocr_conf = (sum(valid_confs) / len(valid_confs)) * 100.0
+            # Show image if it valid
+            if debug:
+                print("Number accepted was: ", number_str, " for track_id: ", tid)
+                cv2.imshow("Valid Image", processed_img)
+                cv2.waitKey(0)
+                cv2.destroyAllWindows()
 
         if debug:
-            print(f"Tesseract raw text: {number_str!r}  conf: {ocr_conf:.1f}%")
+            print(f"PaddleOCR raw text: {number_str!r}  conf: {ocr_conf:.1f}%")
 
         results.append({
             'bbox':          bbox,
             'helmet_number': number_str,
             'ocr_conf':      ocr_conf,
+            'track_id': tid
         })
 
     return results
-
-
 
 # Preprocessing av input
 def preprocess_image(image, debug=False):
@@ -94,93 +114,12 @@ def preprocess_image(image, debug=False):
     # computed_thresh, th1 = cv2.threshold(gray, None, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
     #_, output = cv2.threshold(sharpened, None, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
 
-    output = sharpened
+    output = cv2.cvtColor(sharpened, cv2.COLOR_GRAY2BGR)
 
     # Vis fram for debugging
-    if debug:
-        cv2.imshow("image", output)
-        cv2.waitKey(0)
-        cv2.destroyAllWindows()
+    #if debug:
+    #    cv2.imshow("image", output)
+    #    cv2.waitKey(0)
+    #    cv2.destroyAllWindows()
 
     return output
-
-
-######[OLD]#####
-# Alt under her er old, når vi prøvde digit cropping.
-# Har det liggende her i tilfelle vi vil gå tilbake.
-def show_cropped(image):
-    boxes = image_cropper(image)
-
-    for i, (x, y, w, h) in enumerate(boxes):
-        # Hente ut cropped område fra bilde
-        digit_crop = image[y:y + h, x:x + w]
-        # image = cv2.cvtColor(digit_crop, cv2.COLOR_BGR2RGB)
-        label, confidence = digit_ocr(digit_crop)
-
-        print("Confidence: ", confidence)
-        print("Label/Number: ", label)
-
-        # Funker ganske dårlig ngl. Ting må tunes i image_cropper()
-        # DEBUGGING: Hvis du vil se cropped bilder. uncomment
-        # cv2.imwrite(f"cropped_img{i}.png", digit_crop)
-        cv2.imshow("image", digit_crop)
-        cv2.waitKey(0)
-        cv2.destroyAllWindows()
-
-def image_cropper(image):
-    # Konverter til GrayScale
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-
-    # binarize
-    computed_thresh, thresh = cv2.threshold(gray, None, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)
-
-    th = cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, \
-                         cv2.THRESH_BINARY, 11, 2)
-
-    # find contours (digit blobs)
-    contours, _ = cv2.findContours(th, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
-    # FILTERING DEL
-    # Det er her vi må tune for å faktisk få de gode crops
-    # Next er å få til verdier som er relativ til fatisk størrelsen på det
-    # originale bildet. (Ikke bruke piksler)
-
-    #print("thresh: ", computed_thresh)
-
-    digit_boxes = []
-    for cnt in contours:
-        x, y, w, h = cv2.boundingRect(cnt)
-        aspect_ratio = h / float(w) if w > 0 else 0
-
-        # Exclude horizontal bars (aspect < 0.3) and tiny noise (area < 100)
-        # Keep boxes that look digit-shaped
-        #if aspect_ratio > 0.6 and w * h > 400 and h > 20:
-        #    digit_boxes.append((x, y, w, h))
-
-    # Sort and take first 3
-    digit_boxes.sort(key=lambda box: box[0])
-    digit_boxes = digit_boxes[:3]
-
-    return digit_boxes
-
-def digit_ocr(img):
-    # image = Image.open("digits_debug_2.jpg").convert("RGB")
-
-    image = Image.fromarray(img)
-
-    # Unsqueezer det siden vi har shape (3, W, H) men trenger (1, 3, W, H) der 1 er batch size
-    img_normalized = tr(image).unsqueeze(0)
-    print("img shape: ", img_normalized.shape)
-    print("length: ", len(img_normalized))
-
-    result = model(img_normalized)
-
-    # Aner ikke hva denne faktisk gjør
-    # Tensor stuff til probability score og labels
-    probs = torch.nn.functional.softmax(result, dim=1)
-    conf, pred = probs.max(dim=-1)
-
-    label = pred.item()
-    confidence = conf.item()
-
-    return label, confidence
