@@ -5,11 +5,11 @@ from collections import defaultdict, Counter
 
 from functions.BBExtractor import extract_helmet_box
 from functions.register_helmet import register_helmet
-
+from functions.roi import bbox_center_in_roi
 
 class Tracker:
-    def __init__(self, ocr_frames, conf_threshold):
-        # Initialize tracker
+    def __init__(self, ocr_frames, conf_threshold, roi):
+
         # BoxAnnotator draws the bounding boxes, LabelAnnotator draws the track ID.
         self.tracker_people = ByteTrackTracker(lost_track_buffer=150)
         self.tracker_helmet = ByteTrackTracker(lost_track_buffer=150)
@@ -30,6 +30,8 @@ class Tracker:
         # Param Options
         self.ocr_frames = ocr_frames  # collect votes for N frames before deciding
         self.conf_threshold = conf_threshold
+
+        self.roi = roi
 
     def track_detection(self,detections: sv.Detections, frame):
         # Separate them
@@ -62,7 +64,7 @@ class Tracker:
         self.check_for_ocr(non_confirmed_helmets, frame)
 
     def check_for_ocr(self, non_confirmed_helmets: sv.Detections, frame):
-        if len(self.helmet_tracks) > 0:
+        if len(self.helmet_tracks) > 0 and self.roi is not None:
             #Format for BBExtractor
             det_full = np.column_stack([
                 non_confirmed_helmets.xyxy,
@@ -74,9 +76,14 @@ class Tracker:
             # Extracts the bbox for the helmet
             helmets = extract_helmet_box(det_full, frame)
 
+            if self.roi is not None:
+                helmets = [h for h in helmets if bbox_center_in_roi(h["bbox"], self.roi)]
+
             if len(helmets) > 0:
+
                 # Gets the OCR result for helmet number based on extracted bbox
                 helmet_results = register_helmet(helmets, debug=True)
+
                 for h in helmet_results:
                     tid = h['track_id']
                     number = h['helmet_number']

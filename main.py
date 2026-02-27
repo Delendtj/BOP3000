@@ -67,7 +67,7 @@ cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
 cv2.namedWindow('Yolo vision', cv2.WINDOW_NORMAL)
 
 # THE TRACKER
-tracker = Tracker(OCR_FRAMES, CONF_THRESHOLD)
+tracker = Tracker(OCR_FRAMES, CONF_THRESHOLD, roi)
 
 prev_frame_time = None
 fps_ema = 0.0
@@ -79,6 +79,7 @@ while cap.isOpened():
         break
 
     frame_count += 1
+
 
     if frame_count % FRAME_SKIP == 0:
         result = model(
@@ -92,8 +93,8 @@ while cap.isOpened():
             verbose=INFERENCE_CONFIG['verbose']
         )[0]
 
-
         detections = sv.Detections.from_ultralytics(result)
+
         tracker.track_detection(detections, frame)
 
     else:
