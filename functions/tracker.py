@@ -129,7 +129,7 @@ class Tracker:
                             self.helmet_tracks.data['helmet_number'][idxs[0]] = final_number
                             # This we can later use to skip runs on tracks that have set Helmet nums
                             # We are currently doing runs on them regardless.
-                            self.processed_tracker_ids.append(tid)
+                            self.processed_tracker_ids.add(tid)
 
 
     def annotate(self, frame):

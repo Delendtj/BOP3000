@@ -9,8 +9,6 @@ from trackers import ByteTrackTracker
 from collections import defaultdict, Counter
 
 # Main program functions
-from functions.register_helmet import register_helmet
-from functions.BBExtractor import extract_helmet_box
 from functions.roi import load_roi, save_roi, select_roi
 from functions.tracker import Tracker
 from hardware_detector import HardwareDetector
@@ -103,6 +101,7 @@ while cap.isOpened():
     else:
         pass
 
+    # Annotate frames
     annotated = tracker.annotate(frame)
 
     if roi is not None:
@@ -113,8 +112,6 @@ while cap.isOpened():
             (0, 255, 255),
             2,
         )
-
-        annotated = label_annotator.annotate(annotated, last_detections, labels=labels)
 
     if roi is not None:
         cv2.polylines(
