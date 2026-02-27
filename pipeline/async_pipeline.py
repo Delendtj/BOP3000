@@ -7,30 +7,29 @@ from typing import Optional, Any
 
 
 #
-# 1) Datastruktur for en frame
+# Datastruktur for en frame
 #
 @dataclass
 class FrameItem:
     """
     En "pakke" vi sender mellom tråder.
-    - ts: tidspunkt (perf_counter) når frame ble tatt ut av VideoCapture
-    - frame: selve bildet (numpy array fra OpenCV)
+ ts: tidspunkt (perf_counter) når frame ble tatt ut av VideoCapture
+ frame: selve bildet (numpy array fra OpenCV)
     """
     ts: float
     frame: Any
 
 
-# =========================
 # 2) Queue som alltid holder "siste frame"
 #
 class LatestQueue(queue.Queue):
     """
-    Vanlig queue kan bygge kø og skape latency (forsinkelse).
+    vaanlig queue kan bygge kø og skape latency (forsinkelse).
     I realtime vil vi heller ha "nyeste frame" enn å prosessere gamle frames.
 
     put_latest():
-    Hvis køen er full: dropp én gammel frame og legg inn den nye.
-    Resultat: vi ligger nærmest mulig live, selv om prosesseringen blir litt treg.
+    om køen er full: dropp én gammel frame og legg inn den nye.
+    resultat: vi ligger nærmest mulig live, selv om prosesseringen blir litt treg.
     """
     def put_latest(self, item):
         try:
@@ -45,13 +44,13 @@ class LatestQueue(queue.Queue):
 
 
 # 3) Tråd 1: Capture (leser frames fra video/kamera)
-# =========================
+#
 def capture_loop(cap: cv2.VideoCapture,
                  out_q: LatestQueue,
                  stop_event: threading.Event,
                  frame_skip: int = 1):
     """
-    Leser frames fra OpenCV VideoCapture i en egen tråd.
+    leser frames fra OpenCV VideoCapture i en egen tråd.
     gjør at hovedtråden slipper å "vente" på disk/kamera.
     frame_skip kan brukes for å hoppe over frames (redusere load).
 
@@ -72,7 +71,7 @@ def capture_loop(cap: cv2.VideoCapture,
         out_q.put_latest(FrameItem(time.perf_counter(), frame))
 
 
-# 4) Tråd 2: Preprocessing (valgfritt steg)
+# 4) Tråd 2: Preprocessing (valgfritt steg egt kan sees på)
 def preprocess_loop(in_q: LatestQueue,
                     out_q: LatestQueue,
                     stop_event: threading.Event,
@@ -99,7 +98,7 @@ def preprocess_loop(in_q: LatestQueue,
 
 
 # 5) Pipeline-klassen (det vi bruker i main.py)
-# =========================
+# 
 class AsyncFramePipeline:
     """
 Dette er "wrapperen" main.py bruker.
