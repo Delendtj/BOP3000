@@ -19,13 +19,22 @@ class Tracker:
         self.people_tracks = sv.Detections.empty()
         self.helmet_tracks = sv.Detections.empty()
 
+        # Keeps track of tracks that have confirmed helmet numbers
         self.processed_tracker_ids = set()
+        # Keeps track on OCR cooldown and retries logic
+        self.ocr_runs = defaultdict(lambda: {
+            "runs": 0,
+            "cooldown": 0,
+            "votes": []
+        })
 
-        self.ocr_votes = defaultdict(list)  # {tracker_id: [list of ocr strings]}
+        # self.ocr_votes = defaultdict(list)  # {tracker_id: [list of ocr strings]}
         self.helmet_numbers_final = {}  # {tracker_id: final_number}
 
+        # Consts
         self.PERSON_CLASS_ID = 1
         self.HELMET_CLASS_ID = 0
+        self.RUNS_BEFORE_RETRY = 3
 
         # Param Options
         self.ocr_frames = ocr_frames  # collect votes for N frames before deciding
@@ -81,6 +90,7 @@ class Tracker:
 
             if len(helmets) > 0:
 
+                # [RUNS THE OCR]
                 # Gets the OCR result for helmet number based on extracted bbox
                 helmet_results = register_helmet(helmets, debug=True)
 
@@ -88,16 +98,25 @@ class Tracker:
                     tid = h['track_id']
                     number = h['helmet_number']
 
+                    # Skip if we have done three consecutive runs on a track
+                    if self.ocr_runs[tid]['runs'] >= self.RUNS_BEFORE_RETRY:
+                        self.ocr_runs[tid]['cooldown'] += 1
+
+                        # Reset if cooldown reached
+                        if self.ocr_runs[tid]['cooldown'] >= self.RUNS_COOLDOWN:
+                            self.ocr_runs[tid]['runs'] = 0
+                        continue
+
                     # ocr_votes is a list of OCR results (helmet_number) for a given tracker_id
                     if number != "":  # only count non-empty results
-                        self.ocr_votes[tid].append(number)
+                        self.ocr_runs[tid]['votes'].append(number)
 
                     # Once we have enough votes, pick the winner
                     # Currently this makes it so that when a number is set
                     # it is set forever for that tracker id
-                    print("tid: ", tid, " votes: ", self.ocr_votes[tid])
-                    if len(self.ocr_votes[tid]) >= self.ocr_frames and tid not in self.helmet_numbers_final:
-                        final_number = Counter(self.ocr_votes[tid]).most_common(1)[0][0]
+                    print("tid: ", tid, " votes: ", self.ocr_runs[tid]['votes'])
+                    if len(self.ocr_runs[tid]['votes']) >= self.ocr_frames and tid not in self.helmet_numbers_final:
+                        final_number = Counter(self.ocr_runs[tid]['votes']).most_common(1)[0][0]
                         # Idk if this is actually redundant, because we already add this into helmet_tracks at the end
                         self.helmet_numbers_final[tid] = final_number
                         print(f"Tracker {tid} final helmet number: {final_number}")
@@ -108,6 +127,9 @@ class Tracker:
                         # Then add the final number to that specific Track
                         if len(idxs) > 0:
                             self.helmet_tracks.data['helmet_number'][idxs[0]] = final_number
+                            # This we can later use to skip runs on tracks that have set Helmet nums
+                            # We are currently doing runs on them regardless.
+                            self.processed_tracker_ids.append(tid)
 
 
     def annotate(self, frame):
