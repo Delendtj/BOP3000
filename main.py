@@ -1,10 +1,10 @@
 import cv2
 import os
 import time
+import tkinter as tk
 
 import numpy as np
 import supervision as sv
-
 from functions.roi import load_roi, save_roi, select_roi
 from functions.tracker import Tracker
 from hardware_detector import HardwareDetector
@@ -12,7 +12,6 @@ from hardware_detector import HardwareDetector
 config = {
     'Model_OV_path': "models/best_openvino_model",
     'Model_PT_path': "models/1280.pt",
-    'Model_ONNX_path': "models/1280.onnx",
     'Tensor_engine_path': "models/1280.engine",
     'USE_FP16': True,
     'IMGSZ': 1280,
@@ -30,8 +29,8 @@ INFERENCE_CONFIG = {
     'iou': 0.5,
     'max_det': 300,
     'imgsz': 1280,
-    'half': True, # Switch til True hvis du bruker GPU
-    'device': 0, # Same here
+    'half': False, # Switch til True hvis du bruker GPU
+    'device': None, # Same here
     'verbose': False,
 }
 
@@ -39,6 +38,12 @@ ROI_PATH = os.path.join("img", "detection_roi.json")
 
 detector = HardwareDetector(config)
 model = detector.initialize_model()
+
+# Screen resolution for window sizing
+root = tk.Tk()
+system_width = root.winfo_screenwidth()
+system_height = root.winfo_screenheight()
+root.destroy()
 
 # Open video
 cap = cv2.VideoCapture(DATA_PATH)
@@ -58,7 +63,7 @@ cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
 cv2.namedWindow('Yolo vision', cv2.WINDOW_NORMAL)
 
 # THE TRACKER
-tracker = Tracker(OCR_FRAMES, CONF_THRESHOLD, roi)
+tracker = Tracker(OCR_FRAMES, CONF_THRESHOLD, roi, frame_rate=fps)
 
 prev_frame_time = None
 fps_ema = 0.0
