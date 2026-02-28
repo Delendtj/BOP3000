@@ -1,16 +1,10 @@
 import cv2
 import os
 import time
-import tkinter as tk
 
 import numpy as np
 import supervision as sv
-from trackers import ByteTrackTracker
-from collections import defaultdict, Counter
 
-# Main program functions
-from functions.register_helmet import register_helmet
-from functions.BBExtractor import extract_helmet_box
 from functions.roi import load_roi, save_roi, select_roi
 from functions.tracker import Tracker
 from hardware_detector import HardwareDetector
@@ -18,12 +12,13 @@ from hardware_detector import HardwareDetector
 config = {
     'Model_OV_path': "models/best_openvino_model",
     'Model_PT_path': "models/1280.pt",
+    'Model_ONNX_path': "models/1280.onnx",
     'Tensor_engine_path': "models/1280.engine",
     'USE_FP16': True,
     'IMGSZ': 1280,
 }
 
-DATA_PATH = "../videos/DJI_CUT.MP4"
+DATA_PATH = "DJI_CUT.MP4"
 CONF_THRESHOLD = 0.3
 FRAME_SKIP = 1
 OCR_FRAMES = 3          # collect votes for N frames before deciding
@@ -35,8 +30,8 @@ INFERENCE_CONFIG = {
     'iou': 0.5,
     'max_det': 300,
     'imgsz': 1280,
-    'half': False, # Switch til True hvis du bruker GPU
-    'device': None, # Same here
+    'half': True, # Switch til True hvis du bruker GPU
+    'device': 0, # Same here
     'verbose': False,
 }
 
@@ -44,12 +39,6 @@ ROI_PATH = os.path.join("img", "detection_roi.json")
 
 detector = HardwareDetector(config)
 model = detector.initialize_model()
-
-# Screen resolution for window sizing
-root = tk.Tk()
-system_width = root.winfo_screenwidth()
-system_height = root.winfo_screenheight()
-root.destroy()
 
 # Open video
 cap = cv2.VideoCapture(DATA_PATH)
@@ -114,17 +103,6 @@ while cap.isOpened():
             2,
         )
 
-        annotated = label_annotator.annotate(annotated, last_detections, labels=labels)
-
-    if roi is not None:
-        cv2.polylines(
-            annotated,
-            [np.array(roi, dtype=np.int32)],
-            True,
-            (0, 255, 255),
-            2,
-        )
-
     now = time.perf_counter()
     if prev_frame_time is not None:
         elapsed = now - prev_frame_time
@@ -154,6 +132,7 @@ while cap.isOpened():
         new_roi = select_roi(frame)
         if new_roi is not None:
             roi = new_roi
+            tracker.set_roi(roi)
             save_roi(ROI_PATH, roi)
 
 cap.release()
