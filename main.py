@@ -5,10 +5,6 @@ import tkinter as tk
 
 import numpy as np
 import supervision as sv
-from trackers import ByteTrackTracker
-from collections import defaultdict, Counter
-
-# Main program functions
 from functions.roi import load_roi, save_roi, select_roi
 from functions.tracker import Tracker
 from hardware_detector import HardwareDetector
@@ -21,7 +17,7 @@ config = {
     'IMGSZ': 1280,
 }
 
-DATA_PATH = "../videos/DJI_CUT.MP4"
+DATA_PATH = "DJI_CUT.MP4"
 CONF_THRESHOLD = 0.3
 FRAME_SKIP = 1
 OCR_FRAMES = 3          # collect votes for N frames before deciding
@@ -67,7 +63,7 @@ cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
 cv2.namedWindow('Yolo vision', cv2.WINDOW_NORMAL)
 
 # THE TRACKER
-tracker = Tracker(OCR_FRAMES, CONF_THRESHOLD, roi)
+tracker = Tracker(OCR_FRAMES, CONF_THRESHOLD, roi, frame_rate=fps)
 
 prev_frame_time = None
 fps_ema = 0.0
@@ -113,15 +109,6 @@ while cap.isOpened():
             2,
         )
 
-    if roi is not None:
-        cv2.polylines(
-            annotated,
-            [np.array(roi, dtype=np.int32)],
-            True,
-            (0, 255, 255),
-            2,
-        )
-
     now = time.perf_counter()
     if prev_frame_time is not None:
         elapsed = now - prev_frame_time
@@ -151,6 +138,7 @@ while cap.isOpened():
         new_roi = select_roi(frame)
         if new_roi is not None:
             roi = new_roi
+            tracker.set_roi(roi)
             save_roi(ROI_PATH, roi)
 
 cap.release()
