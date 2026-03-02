@@ -6,13 +6,13 @@ import tkinter as tk
 import numpy as np
 import supervision as sv
 from functions.Inference_roi import (
-    crop_frame_to_roi,
     keep_detections_inside_roi,
     shift_detections_to_full_frame,
 )
 from functions.roi import load_roi, roi_inside_roi, save_roi, select_roi
 from functions.tracker import Tracker
 from hardware_detector import HardwareDetector
+from pipeline.async_pipeline import AsyncFramePipeline
 
 config = {
     'Model_OV_path': "models/best_openvino_model",
@@ -66,10 +66,11 @@ system_height = root.winfo_screenheight()
 root.destroy()
 
 # Open video
-cap = cv2.VideoCapture(DATA_PATH)
-fps = cap.get(cv2.CAP_PROP_FPS)
-total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-ret, preview_frame = cap.read()
+preview_cap = cv2.VideoCapture(DATA_PATH)
+fps = preview_cap.get(cv2.CAP_PROP_FPS)
+total_frames = int(preview_cap.get(cv2.CAP_PROP_FRAME_COUNT))
+ret, preview_frame = preview_cap.read()
+preview_cap.release()
 if not ret:
     raise RuntimeError("Could not read initial frame for ROI.")
 
@@ -93,30 +94,36 @@ if ocr_roi is None and yolo_roi is not None:
         ocr_roi = selected_ocr
         save_roi(OCR_ROI_PATH, ocr_roi)
 
-cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-
 cv2.namedWindow('Yolo vision', cv2.WINDOW_NORMAL)
 
 # THE TRACKER
 tracker = Tracker(OCR_FRAMES, CONF_THRESHOLD, ocr_roi, frame_rate=fps)
+pipeline = AsyncFramePipeline(
+    source=DATA_PATH,
+    frame_skip=FRAME_SKIP,
+    queue_size=3,
+    inference_roi=yolo_roi,
+)
+pipeline.start()
 
 prev_frame_time = None
 fps_ema = 0.0
 frame_count = 0
 helmet_saved = False
 
-while cap.isOpened():
-    ret, frame = cap.read()
-    if not ret:
-        break
+try:
+    while True:
+        item = pipeline.read(timeout=0.5)
+        if item is None:
+            if pipeline.stop_event.is_set():
+                break
+            continue
 
-    frame_count += 1
+        frame = item.frame
+        inference_frame = item.inference_frame if item.inference_frame is not None else frame
+        inference_offset = item.inference_offset
 
-    if frame_count % FRAME_SKIP == 0:
-        inference_frame = frame
-        inference_offset = (0, 0)
-        if yolo_roi is not None:
-            inference_frame, inference_offset = crop_frame_to_roi(frame, yolo_roi)
+        frame_count += 1
 
         result = model(
             inference_frame,
@@ -134,76 +141,73 @@ while cap.isOpened():
             detections = shift_detections_to_full_frame(detections, inference_offset)
             detections = keep_detections_inside_roi(detections, yolo_roi)
 
-
         tracker.track_detection(detections, frame)
 
-    else:
-        pass
+        # Annotate frames
+        annotated = tracker.annotate(frame)
 
-    # Annotate frames
-    annotated = tracker.annotate(frame)
+        if yolo_roi is not None:
+            cv2.polylines(
+                annotated,
+                [np.array(yolo_roi, dtype=np.int32)],
+                True,
+                (0, 255, 255),
+                2,
+            )
+        if ocr_roi is not None:
+            cv2.polylines(
+                annotated,
+                [np.array(ocr_roi, dtype=np.int32)],
+                True,
+                (0, 200, 0),
+                2,
+            )
 
-    if yolo_roi is not None:
-        cv2.polylines(
+        now = time.perf_counter()
+        if prev_frame_time is not None:
+            elapsed = now - prev_frame_time
+            if elapsed > 0:
+                fps_inst = 1.0 / elapsed
+                fps_ema = fps_inst if fps_ema <= 0 else (0.9 * fps_ema + 0.1 * fps_inst)
+        prev_frame_time = now
+
+        fps_text = f"FPS: {fps_ema:.1f}" if fps_ema > 0 else "FPS: --"
+        cv2.putText(
             annotated,
-            [np.array(yolo_roi, dtype=np.int32)],
-            True,
+            fps_text,
+            (10, 30),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.8,
             (0, 255, 255),
             2,
         )
-    if ocr_roi is not None:
-        cv2.polylines(
-            annotated,
-            [np.array(ocr_roi, dtype=np.int32)],
-            True,
-            (0, 200, 0),
-            2,
-        )
 
-    now = time.perf_counter()
-    if prev_frame_time is not None:
-        elapsed = now - prev_frame_time
-        if elapsed > 0:
-            fps_inst = 1.0 / elapsed
-            fps_ema = fps_inst if fps_ema <= 0 else (0.9 * fps_ema + 0.1 * fps_inst)
-    prev_frame_time = now
+        display_frame = cv2.resize(annotated, (1280, 720))
+        cv2.imshow('Yolo vision', display_frame)
 
-    fps_text = f"FPS: {fps_ema:.1f}" if fps_ema > 0 else "FPS: --"
-    cv2.putText(
-        annotated,
-        fps_text,
-        (10, 30),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.8,
-        (0, 255, 255),
-        2,
-    )
-
-    display_frame = cv2.resize(annotated, (1280, 720))
-    cv2.imshow('Yolo vision', display_frame)
-
-    key = cv2.waitKey(1) & 0xFF
-    if key == 27:
-        break
-    if key == ord("r"):
-        new_yolo_roi = select_roi(frame, window_name="YOLO ROI Selector")
-        if new_yolo_roi is not None:
-            yolo_roi = new_yolo_roi
-            save_roi(YOLO_ROI_PATH, yolo_roi)
-            save_roi(LEGACY_ROI_PATH, yolo_roi)
-            if ocr_roi is not None and not roi_inside_roi(ocr_roi, yolo_roi):
-                print("Current OCR ROI is outside updated YOLO ROI. Press 'o' to redraw OCR ROI.")
-                ocr_roi = None
-                tracker.set_roi(None)
-    if key == ord("o"):
-        if yolo_roi is None:
-            print("Define YOLO ROI first (press 'r').")
-        else:
-            new_ocr_roi = select_ocr_roi_inside_yolo(frame, yolo_roi)
-            if new_ocr_roi is not None:
-                ocr_roi = new_ocr_roi
-                tracker.set_roi(ocr_roi)
-                save_roi(OCR_ROI_PATH, ocr_roi)
-
-cap.release()
-cv2.destroyAllWindows()
+        key = cv2.waitKey(1) & 0xFF
+        if key == 27:
+            break
+        if key == ord("r"):
+            new_yolo_roi = select_roi(frame, window_name="YOLO ROI Selector")
+            if new_yolo_roi is not None:
+                yolo_roi = new_yolo_roi
+                pipeline.set_inference_roi(yolo_roi)
+                save_roi(YOLO_ROI_PATH, yolo_roi)
+                save_roi(LEGACY_ROI_PATH, yolo_roi)
+                if ocr_roi is not None and not roi_inside_roi(ocr_roi, yolo_roi):
+                    print("Current OCR ROI is outside updated YOLO ROI. Press 'o' to redraw OCR ROI.")
+                    ocr_roi = None
+                    tracker.set_roi(None)
+        if key == ord("o"):
+            if yolo_roi is None:
+                print("Define YOLO ROI first (press 'r').")
+            else:
+                new_ocr_roi = select_ocr_roi_inside_yolo(frame, yolo_roi)
+                if new_ocr_roi is not None:
+                    ocr_roi = new_ocr_roi
+                    tracker.set_roi(ocr_roi)
+                    save_roi(OCR_ROI_PATH, ocr_roi)
+finally:
+    pipeline.stop()
+    cv2.destroyAllWindows()

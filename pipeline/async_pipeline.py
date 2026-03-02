@@ -1,10 +1,11 @@
 import cv2
-import time
-import threading
 import queue
+import threading
+import time
 from dataclasses import dataclass
-from typing import Optional, Any
+from typing import Any, Optional
 
+from functions.Inference_roi import crop_frame_to_roi
 
 #
 # Datastruktur for en frame
@@ -12,25 +13,28 @@ from typing import Optional, Any
 @dataclass
 class FrameItem:
     """
-    En "pakke" vi sender mellom tråder.
- ts: tidspunkt (perf_counter) når frame ble tatt ut av VideoCapture
- frame: selve bildet (numpy array fra OpenCV)
-    """
+        En "pakke" vi sender mellom tråder.
+     ts: tidspunkt (perf_counter) når frame ble tatt ut av VideoCapture
+     frame: selve bildet (numpy array fra OpenCV)
+        """
+    # `frame` is the full frame used for drawing/tracking.
+    # `inference_frame` is an optional ROI-cropped frame for model inference.
     ts: float
     frame: Any
+    inference_frame: Any = None
+    inference_offset: tuple[int, int] = (0, 0)
 
 
-# 2) Queue som alltid holder "siste frame"
-#
 class LatestQueue(queue.Queue):
     """
-    vaanlig queue kan bygge kø og skape latency (forsinkelse).
-    I realtime vil vi heller ha "nyeste frame" enn å prosessere gamle frames.
+        vaanlig queue kan bygge kø og skape latency (forsinkelse).
+        I realtime vil vi heller ha "nyeste frame" enn å prosessere gamle frames.
 
-    put_latest():
-    om køen er full: dropp én gammel frame og legg inn den nye.
-    resultat: vi ligger nærmest mulig live, selv om prosesseringen blir litt treg.
-    """
+        put_latest():
+        om køen er full: dropp én gammel frame og legg inn den nye.
+        resultat: vi ligger nærmest mulig live, selv om prosesseringen blir litt treg.
+        """
+    # Keep only the newest item to avoid latency buildup.
     def put_latest(self, item):
         try:
             self.put_nowait(item)
@@ -94,38 +98,43 @@ def preprocess_loop(in_q: LatestQueue,
         if resize is not None:
             frame = cv2.resize(frame, resize)
 
-        out_q.put_latest(FrameItem(item.ts, frame))
+        roi = roi_getter() if roi_getter is not None else None
+        inference_frame, inference_offset = crop_frame_to_roi(
+            frame,
+            roi,
+            padding=crop_padding,
+        )
+        if inference_frame is None:
+            inference_frame = frame
+            inference_offset = (0, 0)
 
+        out_q.put_latest(
+            FrameItem(
+                ts=item.ts,
+                frame=frame,
+                inference_frame=inference_frame,
+                inference_offset=inference_offset,
+            )
+        )
 
 # 5) Pipeline-klassen (det vi bruker i main.py)
 # 
 class AsyncFramePipeline:
-    """
-Dette er "wrapperen" main.py bruker.
+    def __init__(
+        self,
+        source,
+        frame_skip: int = 1,
 
 
-    fordi main.py skal bare gjøre: item = pipeline.read()
-    pipeline sørger for at capture + preprocessing skjer i bakgrunnen.
-
-    Konsept:
-    Thread 1 capture_loop() legger frames i raw_q
-    Thread 2 preprocess_loop() tar fra raw_q og legger i proc_q
-     main.py - read() tar siste frame fra proc_q og gjør detection/tracking/display
-    """
-
-    def __init__(self,
-                 source,
-                 frame_skip: int = 1,
-                 resize=None,
-                 queue_size: int = 3):
-        """
-        source: video path eller 0/1 for webcam
-        frame_skip: hopp over frames ved capture hvis ønskelig
-        resize: (w,h) eller None
-        queue_size: små køer gir lav latency (3 er ofte fint)
-        """
+        resize=None,
+        queue_size: int = 3,
+        inference_roi=None,
+        crop_padding: int = 0,
+    ):
         self.stop_event = threading.Event()
         self.cap = cv2.VideoCapture(source)
+        self._roi_lock = threading.Lock()
+        self._inference_roi = inference_roi
 
         if not self.cap.isOpened():
             raise RuntimeError(f"Kunne ikke åpne video/kamera: {source}")
@@ -138,14 +147,21 @@ Dette er "wrapperen" main.py bruker.
         self.t_cap = threading.Thread(
             target=capture_loop,
             args=(self.cap, self.raw_q, self.stop_event, frame_skip),
-            daemon=True
+            daemon=True,
         )
 
         # Thread 2: preprocessing
         self.t_pre = threading.Thread(
             target=preprocess_loop,
-            args=(self.raw_q, self.proc_q, self.stop_event, resize),
-            daemon=True
+            args=(
+                self.raw_q,
+                self.proc_q,
+                self.stop_event,
+                resize,
+                self.get_inference_roi,
+                crop_padding,
+            ),
+            daemon=True,
         )
 
     def start(self):
@@ -174,3 +190,17 @@ Dette er "wrapperen" main.py bruker.
         """Stopper pipeline og frigjør VideoCapture."""
         self.stop_event.set()
         self.cap.release()
+        if self.t_cap.is_alive():
+            self.t_cap.join(timeout=1.0)
+        if self.t_pre.is_alive():
+            self.t_pre.join(timeout=1.0)
+
+    def set_inference_roi(self, roi):
+        with self._roi_lock:
+            self._inference_roi = roi
+
+    def get_inference_roi(self):
+        with self._roi_lock:
+            if self._inference_roi is None:
+                return None
+            return [tuple(pt) for pt in self._inference_roi]
