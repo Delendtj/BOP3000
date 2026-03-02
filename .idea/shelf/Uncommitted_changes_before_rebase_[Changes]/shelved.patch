@@ -1,0 +1,1454 @@
+Index: pipeline/async_pipeline.py
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+>import cv2\r\nimport time\r\nimport threading\r\nimport queue\r\nfrom dataclasses import dataclass\r\nfrom typing import Optional, Any\r\n\r\n\r\n#\r\n# 1) Datastruktur for en frame\r\n#\r\n@dataclass\r\nclass FrameItem:\r\n    \"\"\"\r\n    En \"pakke\" vi sender mellom tråder.\r\n    - ts: tidspunkt (perf_counter) når frame ble tatt ut av VideoCapture\r\n    - frame: selve bildet (numpy array fra OpenCV)\r\n    \"\"\"\r\n    ts: float\r\n    frame: Any\r\n\r\n\r\n# =========================\r\n# 2) Queue som alltid holder \"siste frame\"\r\n#\r\nclass LatestQueue(queue.Queue):\r\n    \"\"\"\r\n    Vanlig queue kan bygge kø og skape latency (forsinkelse).\r\n    I realtime vil vi heller ha \"nyeste frame\" enn å prosessere gamle frames.\r\n\r\n    put_latest():\r\n    Hvis køen er full: dropp én gammel frame og legg inn den nye.\r\n    Resultat: vi ligger nærmest mulig live, selv om prosesseringen blir litt treg.\r\n    \"\"\"\r\n    def put_latest(self, item):\r\n        try:\r\n            self.put_nowait(item)\r\n        except queue.Full:\r\n            try:\r\n                _ = self.get_nowait()  # dropp én gammel\r\n            except queue.Empty:\r\n                pass\r\n            self.put_nowait(item)\r\n\r\n\r\n\r\n# 3) Tråd 1: Capture (leser frames fra video/kamera)\r\n# =========================\r\ndef capture_loop(cap: cv2.VideoCapture,\r\n                 out_q: LatestQueue,\r\n                 stop_event: threading.Event,\r\n                 frame_skip: int = 1):\r\n    \"\"\"\r\n    Leser frames fra OpenCV VideoCapture i en egen tråd.\r\n    gjør at hovedtråden slipper å \"vente\" på disk/kamera.\r\n    frame_skip kan brukes for å hoppe over frames (redusere load).\r\n\r\n    out_q: kø som får FrameItem (ts + frame).\r\n    \"\"\"\r\n    i = 0\r\n    while not stop_event.is_set():\r\n        ret, frame = cap.read()\r\n        if not ret:\r\n            # video ferdig / kamera feilet\r\n            stop_event.set()\r\n            break\r\n\r\n        i += 1\r\n        if frame_skip > 1 and (i % frame_skip != 0):\r\n            continue\r\n\r\n        out_q.put_latest(FrameItem(time.perf_counter(), frame))\r\n\r\n\r\n# 4) Tråd 2: Preprocessing (valgfritt steg)\r\ndef preprocess_loop(in_q: LatestQueue,\r\n                    out_q: LatestQueue,\r\n                    stop_event: threading.Event,\r\n                    resize=None):\r\n    \"\"\"\r\n    Henter frames fra capture-kø og gjør lett preprocessing i egen tråd.\r\n    Eksempel: resize / crop / fargekonvertering etc.\r\n\r\n    resize: f.eks. (1280, 720) eller None for ingen resize\r\n    \"\"\"\r\n    while not stop_event.is_set():\r\n        try:\r\n            item: FrameItem = in_q.get(timeout=0.2)\r\n        except queue.Empty:\r\n            continue\r\n\r\n        frame = item.frame\r\n\r\n        # Eksempel preprocessing: resize\r\n        if resize is not None:\r\n            frame = cv2.resize(frame, resize)\r\n\r\n        out_q.put_latest(FrameItem(item.ts, frame))\r\n\r\n\r\n# 5) Pipeline-klassen (det vi bruker i main.py)\r\n# =========================\r\nclass AsyncFramePipeline:\r\n    \"\"\"\r\nDette er \"wrapperen\" main.py bruker.\r\n\r\n\r\n    fordi main.py skal bare gjøre: item = pipeline.read()\r\n    pipeline sørger for at capture + preprocessing skjer i bakgrunnen.\r\n\r\n    Konsept:\r\n    Thread 1 capture_loop() legger frames i raw_q\r\n    Thread 2 preprocess_loop() tar fra raw_q og legger i proc_q\r\n     main.py - read() tar siste frame fra proc_q og gjør detection/tracking/display\r\n    \"\"\"\r\n\r\n    def __init__(self,\r\n                 source,\r\n                 frame_skip: int = 1,\r\n                 resize=None,\r\n                 queue_size: int = 3):\r\n        \"\"\"\r\n        source: video path eller 0/1 for webcam\r\n        frame_skip: hopp over frames ved capture hvis ønskelig\r\n        resize: (w,h) eller None\r\n        queue_size: små køer gir lav latency (3 er ofte fint)\r\n        \"\"\"\r\n        self.stop_event = threading.Event()\r\n        self.cap = cv2.VideoCapture(source)\r\n\r\n        if not self.cap.isOpened():\r\n            raise RuntimeError(f\"Kunne ikke åpne video/kamera: {source}\")\r\n\r\n        # Køene\r\n        self.raw_q = LatestQueue(maxsize=queue_size)\r\n        self.proc_q = LatestQueue(maxsize=queue_size)\r\n\r\n        # Thread 1: capture\r\n        self.t_cap = threading.Thread(\r\n            target=capture_loop,\r\n            args=(self.cap, self.raw_q, self.stop_event, frame_skip),\r\n            daemon=True\r\n        )\r\n\r\n        # Thread 2: preprocessing\r\n        self.t_pre = threading.Thread(\r\n            target=preprocess_loop,\r\n            args=(self.raw_q, self.proc_q, self.stop_event, resize),\r\n            daemon=True\r\n        )\r\n\r\n    def start(self):\r\n        \"\"\"Start trådene.\"\"\"\r\n        self.t_cap.start()\r\n        self.t_pre.start()\r\n\r\n    def read(self, timeout: float = 0.5) -> Optional[FrameItem]:\r\n        \"\"\"\r\n        Henter en ferdig frame fra pipeline.\r\n        Returnerer:\r\n        - FrameItem hvis det finnes frame\r\n        - None hvis ingen frame innen timeout\r\n\r\n        main.py kan da gjøre:\r\n        item = pipeline.read()\r\n        if item is None: continue\r\n        frame = item.frame\r\n        \"\"\"\r\n        try:\r\n            return self.proc_q.get(timeout=timeout)\r\n        except queue.Empty:\r\n            return None\r\n\r\n    def stop(self):\r\n        \"\"\"Stopper pipeline og frigjør VideoCapture.\"\"\"\r\n        self.stop_event.set()\r\n        self.cap.release()
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/pipeline/async_pipeline.py b/pipeline/async_pipeline.py
+--- a/pipeline/async_pipeline.py	(revision d2d63706dc31af88035cab8a481a76e8c9851079)
++++ b/pipeline/async_pipeline.py	(date 1772196202068)
+@@ -1,67 +1,100 @@
++# pipeline/async_pipeline.py
++#
++# ANSVAR: Orkestrerer hele pipeline-systemet.
++# Dette er "sjefen" som eier alle køer og starter alle tråder.
++#
++# FLYT:
++#   capture_loop  →  raw_q
++#   preprocess    →  proc_q
++#   inference     →  det_q
++#   tracking      →  event_q
++#   output        →  JSON / API
++#
++# main.py trenger bare å gjøre:
++#   pipeline = AsyncFramePipeline(source="video.mp4", config=cfg)
++#   pipeline.start()
++#   ... (main loop: vis frame, håndter events)
++#   pipeline.stop()
++#
++
+ import cv2
+ import time
+-import threading
+ import queue
+-from dataclasses import dataclass
++import threading
++import logging
++from dataclasses import dataclass, field
+ from typing import Optional, Any
+ 
++from pipeline.inference_pipeline import inference_loop, DetectionItem
++from pipeline.tracking_pipeline import tracking_loop, TrackingEvent
++from pipeline.output_pipeline import output_loop
++
++logger = logging.getLogger(__name__)
+ 
+-#
+-# 1) Datastruktur for en frame
+-#
++
++# ---------------------------------------------------------------------------
++# Datastruktur: FrameItem
++# ---------------------------------------------------------------------------
+ @dataclass
+ class FrameItem:
+     """
+-    En "pakke" vi sender mellom tråder.
+-    - ts: tidspunkt (perf_counter) når frame ble tatt ut av VideoCapture
+-    - frame: selve bildet (numpy array fra OpenCV)
++    "Pakken" som flyter gjennom capture → preprocess → inference.
++
++    ts:       tidspunkt (perf_counter) når frame ble lest – brukes til
++              latency-måling og Kalman-filtrering.
++    frame:    selve bildet (numpy array fra OpenCV).
++    frame_id: løpenummer – viktig for Re-ID, debugging og fall-deteksjon.
+     """
+     ts: float
+     frame: Any
++    frame_id: int = 0
+ 
+ 
+-# =========================
+-# 2) Queue som alltid holder "siste frame"
+-#
++# ---------------------------------------------------------------------------
++# LatestQueue – beholder alltid nyeste frame
++# ---------------------------------------------------------------------------
+ class LatestQueue(queue.Queue):
+     """
+-    Vanlig queue kan bygge kø og skape latency (forsinkelse).
+-    I realtime vil vi heller ha "nyeste frame" enn å prosessere gamle frames.
++    Vanlig Queue kan hope seg opp og gi latency.
++    LatestQueue dropper gamle frames hvis køen er full,
++    slik at vi alltid prosesserer det nyeste bildet.
+ 
+-    put_latest():
+-    Hvis køen er full: dropp én gammel frame og legg inn den nye.
+-    Resultat: vi ligger nærmest mulig live, selv om prosesseringen blir litt treg.
++    VIKTIG, jeg bruker IKKE denne for events (runde fullført, fall osv.)
++            – de må aldri droppes. der brukes vanlig queue.Queue() for events.
+     """
+     def put_latest(self, item):
+         try:
+             self.put_nowait(item)
+         except queue.Full:
+             try:
+-                _ = self.get_nowait()  # dropp én gammel
++                self.get_nowait()   # dropp én gammel frame
+             except queue.Empty:
+                 pass
+             self.put_nowait(item)
+ 
+ 
+-
+-# 3) Tråd 1: Capture (leser frames fra video/kamera)
+-# =========================
++# ---------------------------------------------------------------------------
++# Tråd 1: capture_loop
++#
+ def capture_loop(cap: cv2.VideoCapture,
+                  out_q: LatestQueue,
+                  stop_event: threading.Event,
+                  frame_skip: int = 1):
+     """
+-    Leser frames fra OpenCV VideoCapture i en egen tråd.
+-    gjør at hovedtråden slipper å "vente" på disk/kamera.
+-    frame_skip kan brukes for å hoppe over frames (redusere load).
++    Leser frames fra kamera/video kontinuerlig i en egen tråd.
++    Sørger for at hovedtråden aldri venter på disk/kamera.
+ 
+-    out_q: kø som får FrameItem (ts + frame).
++    frame_skip: hopp over frames for å redusere GPU-last.
++                1 = prosesser alle frames
++                3 = prosesser hver 3. frame (jf. PRD 5.2.4)
+     """
++    frame_id = 0
+     i = 0
++
+     while not stop_event.is_set():
+         ret, frame = cap.read()
+         if not ret:
+-            # video ferdig / kamera feilet
++            logger.warning("Capture: ingen flere frames – stopper.")
+             stop_event.set()
+             break
+ 
+@@ -69,19 +102,28 @@
+         if frame_skip > 1 and (i % frame_skip != 0):
+             continue
+ 
+-        out_q.put_latest(FrameItem(time.perf_counter(), frame))
++        frame_id += 1
++        out_q.put_latest(FrameItem(
++            ts=time.perf_counter(),
++            frame=frame,
++            frame_id=frame_id
++        ))
+ 
+ 
+-# 4) Tråd 2: Preprocessing (valgfritt steg)
++# ---------------------------------------------------------------------------
++# Tråd 2: preprocess_loop
+ def preprocess_loop(in_q: LatestQueue,
+                     out_q: LatestQueue,
+                     stop_event: threading.Event,
+                     resize=None):
+     """
+-    Henter frames fra capture-kø og gjør lett preprocessing i egen tråd.
+-    Eksempel: resize / crop / fargekonvertering etc.
++    Gjør lett preprocessing av frames før inference:
++    resize, fargekonvertering osv.
+ 
+-    resize: f.eks. (1280, 720) eller None for ingen resize
++    Kjører i egen tråd slik at GPU-tråden alltid har en
++    ferdig-preprosessert frame klar.
++
++    resize: (bredde, høyde) eller None for ingen resize.
+     """
+     while not stop_event.is_set():
+         try:
+@@ -90,88 +132,151 @@
+             continue
+ 
+         frame = item.frame
+-
+-        # Eksempel preprocessing: resize
+         if resize is not None:
+             frame = cv2.resize(frame, resize)
+ 
+-        out_q.put_latest(FrameItem(item.ts, frame))
++        out_q.put_latest(FrameItem(
++            ts=item.ts,
++            frame=frame,
++            frame_id=item.frame_id
++        ))
+ 
+ 
+-# 5) Pipeline-klassen (det vi bruker i main.py)
+-# =========================
++# ---------------------------------------------------------------------------
++# AsyncFramePipeline – hovedklassen
++# ---------------------------------------------------------------------------
+ class AsyncFramePipeline:
+     """
+-Dette er "wrapperen" main.py bruker.
++    Wrapper som main.py bruker.
+ 
++    Starter og styrer alle 5 tråder:
++      T1 capture → T2 preprocess → T3 inference → T4 tracking → T5 output
+ 
+-    fordi main.py skal bare gjøre: item = pipeline.read()
+-    pipeline sørger for at capture + preprocessing skjer i bakgrunnen.
+-
+-    Konsept:
+-    Thread 1 capture_loop() legger frames i raw_q
+-    Thread 2 preprocess_loop() tar fra raw_q og legger i proc_q
+-     main.py - read() tar siste frame fra proc_q og gjør detection/tracking/display
++    Eksempel bruk i main.py:
++        pipeline = AsyncFramePipeline(source=0, config=cfg)
++        pipeline.start()
++        while True:
++            item = pipeline.latest_frame()      # siste ferdig frame
++            event = pipeline.next_event()       # neste tracking-event (runde, fall)
++            if item: vis_frame(item.frame)
++            if event: håndter(event)
++        pipeline.stop()
+     """
+ 
+     def __init__(self,
+                  source,
++                 config=None,
+                  frame_skip: int = 1,
+                  resize=None,
+                  queue_size: int = 3):
+         """
+-        source: video path eller 0/1 for webcam
+-        frame_skip: hopp over frames ved capture hvis ønskelig
+-        resize: (w,h) eller None
+-        queue_size: små køer gir lav latency (3 er ofte fint)
++        source:     video-path (str) eller 0/1 for webcam
++        config:     konfig-objekt sendt videre til inference + tracking
++        frame_skip: se capture_loop
++        resize:     se preprocess_loop
++        queue_size: liten kø = lav latency (3 er vanligvis bra)
+         """
+         self.stop_event = threading.Event()
++        self.config = config
++
+         self.cap = cv2.VideoCapture(source)
+-
+         if not self.cap.isOpened():
+-            raise RuntimeError(f"Kunne ikke åpne video/kamera: {source}")
++            raise RuntimeError(f"Kunne ikke åpne: {source}")
+ 
+-        # Køene
+-        self.raw_q = LatestQueue(maxsize=queue_size)
+-        self.proc_q = LatestQueue(maxsize=queue_size)
++        # --- Køer ---
++        self.raw_q   = LatestQueue(maxsize=queue_size)  # capture → preprocess
++        self.proc_q  = LatestQueue(maxsize=queue_size)  # preprocess → inference
++        self.det_q   = LatestQueue(maxsize=queue_size)  # inference → tracking
++        self.event_q = queue.Queue()                    # tracking → output (ALDRI dropp)
+ 
+-        # Thread 1: capture
++        # --- Tråder ---
+         self.t_cap = threading.Thread(
+             target=capture_loop,
+             args=(self.cap, self.raw_q, self.stop_event, frame_skip),
+-            daemon=True
++            daemon=True, name="T1-Capture"
+         )
+-
+-        # Thread 2: preprocessing
+         self.t_pre = threading.Thread(
+             target=preprocess_loop,
+             args=(self.raw_q, self.proc_q, self.stop_event, resize),
+-            daemon=True
++            daemon=True, name="T2-Preprocess"
++        )
++        self.t_inf = threading.Thread(
++            target=inference_loop,
++            args=(self.proc_q, self.det_q, self.stop_event, config),
++            daemon=True, name="T3-Inference"
++        )
++        self.t_track = threading.Thread(
++            target=tracking_loop,
++            args=(self.det_q, self.event_q, self.stop_event, config),
++            daemon=True, name="T4-Tracking"
++        )
++        self.t_out = threading.Thread(
++            target=output_loop,
++            args=(self.event_q, self.stop_event),
++            daemon=True, name="T5-Output"
+         )
+ 
++    # --- Properties: video-metadata ---
++    @property
++    def fps(self) -> float:
++        """FPS fra kilden – brukes bl.a. til Kalman og fall-deteksjon."""
++        return self.cap.get(cv2.CAP_PROP_FPS) or 30.0
++
++    @property
++    def frame_size(self) -> tuple:
++        """(bredde, høyde) fra kilden."""
++        w = int(self.cap.get(cv2.CAP_PROP_FRAME_WIDTH))
++        h = int(self.cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
++        return (w, h)
++
++    # --- Kontroll ---
+     def start(self):
+-        """Start trådene."""
++        """Starter alle 5 tråder."""
++        logger.info("Pipeline starter...")
+         self.t_cap.start()
+         self.t_pre.start()
++        self.t_inf.start()
++        self.t_track.start()
++        self.t_out.start()
++        logger.info(f"Pipeline kjører | FPS={self.fps} | Størrelse={self.frame_size}")
+ 
+-    def read(self, timeout: float = 0.5) -> Optional[FrameItem]:
++    def stop(self):
++        """
++        Stopper pipeline ryddig:
++        1. Setter stop_event så alle tråder avslutter sine løkker.
++        2. Venter (join) på at trådene faktisk er ferdig.
++        3. Frigjør VideoCapture.
+         """
+-        Henter en ferdig frame fra pipeline.
+-        Returnerer:
+-        - FrameItem hvis det finnes frame
+-        - None hvis ingen frame innen timeout
++        logger.info("Pipeline stopper...")
++        self.stop_event.set()
++        for t in [self.t_cap, self.t_pre, self.t_inf, self.t_track, self.t_out]:
++            t.join(timeout=2.0)
++        self.cap.release()
++        logger.info("Pipeline stoppet.")
+ 
+-        main.py kan da gjøre:
+-        item = pipeline.read()
+-        if item is None: continue
+-        frame = item.frame
++    # --- Lese ut data (brukes av main.py) ---
++    def latest_frame(self, timeout: float = 0.5) -> Optional[DetectionItem]:
++        """
++        henter siste ferdig-detekterte frame (med bounding boxes).
++        returnerer None hvis ingen frame innen timeout.
++        main.py bruker dette til å vise live video.
+         """
+         try:
+-            return self.proc_q.get(timeout=timeout)
++            return self.det_q.get(timeout=timeout)
+         except queue.Empty:
+             return None
+ 
+-    def stop(self):
+-        """Stopper pipeline og frigjør VideoCapture."""
+-        self.stop_event.set()
+-        self.cap.release()
+\ No newline at end of file
++    def next_event(self) -> Optional[TrackingEvent]:
++        """
++        henter neste tracking-event (runde fullført, fall, Re-ID osv.)
++        returnerer None hvis ingen events i køen.
++        main.py bruker dette til å oppdatere scoreboard.
++        """
++        try:
++            return self.event_q.get_nowait()
++        except queue.Empty:
++            return None
++
++
++
++
+Index: main.py
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+>import cv2\r\nimport os\r\nimport time\r\nimport tkinter as tk\r\n\r\nimport numpy as np\r\nimport supervision as sv\r\nfrom trackers import ByteTrackTracker\r\n\r\n# Main program functions\r\nfrom functions.register_helmet import register_helmet\r\nfrom functions.BBExtractor import extract_helmet_box\r\nfrom functions.roi import load_roi, save_roi, select_roi\r\nfrom hardware_detector import HardwareDetector\r\n\r\nconfig = {\r\n    'Model_OV_path': \"models/best_openvino_model\",\r\n    'Model_PT_path': \"models/1280.pt\",\r\n    'Tensor_engine_path': \"models/1280.engine\",\r\n    'USE_FP16': True,\r\n    'IMGSZ': 1280,\r\n}\r\n\r\ndata_path = \"DJI_20260211182952_0004_D.MP4\"\r\nconf_threshold = 0.3\r\nframe_skip = 1\r\n\r\nINFERENCE_CONFIG = {\r\n    'conf': conf_threshold,\r\n    'iou': 0.5,\r\n    'max_det': 300,\r\n    'imgsz': 1280,\r\n    'half': True,\r\n    'device': 0,\r\n    'verbose': False,\r\n}\r\n\r\nROI_PATH = os.path.join(\"img\", \"detection_roi.json\")\r\n\r\ndetector = HardwareDetector(config)\r\nmodel = detector.initialize_model()\r\n\r\n# Screen resolution for window sizing\r\nroot = tk.Tk()\r\nsystem_width = root.winfo_screenwidth()\r\nsystem_height = root.winfo_screenheight()\r\nroot.destroy()\r\n\r\n# Open video\r\ncap = cv2.VideoCapture(data_path)\r\nfps = cap.get(cv2.CAP_PROP_FPS)\r\ntotal_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))\r\nret, preview_frame = cap.read()\r\nif not ret:\r\n    raise RuntimeError(\"Could not read initial frame for ROI.\")\r\n\r\nroi = load_roi(ROI_PATH)\r\nif roi is None:\r\n    roi = select_roi(preview_frame)\r\n    if roi is not None:\r\n        save_roi(ROI_PATH, roi)\r\ncap.set(cv2.CAP_PROP_POS_FRAMES, 0)\r\n\r\ncv2.namedWindow('Yolo vision', cv2.WINDOW_NORMAL)\r\n\r\n# Initialize tracker\r\n# BoxAnnotator draws the bounding boxes, LabelAnnotator draws the track ID.\r\ntracker = ByteTrackTracker(lost_track_buffer=150)\r\nbox_annotator = sv.BoxAnnotator()\r\nlabel_annotator = sv.LabelAnnotator()\r\n\r\nframe_count = 0\r\nhelmet_saved = False\r\n\r\nlast_detections = sv.Detections.empty()\r\nprev_frame_time = None\r\nfps_ema = 0.0\r\n\r\nwhile cap.isOpened():\r\n    ret, frame = cap.read()\r\n    if not ret:\r\n        break\r\n\r\n    frame_count += 1\r\n\r\n    if frame_count % frame_skip == 0:\r\n        result = model(\r\n            frame,\r\n            conf=INFERENCE_CONFIG['conf'],\r\n            iou=INFERENCE_CONFIG['iou'],\r\n            max_det=INFERENCE_CONFIG['max_det'],\r\n            imgsz=INFERENCE_CONFIG['imgsz'],\r\n            half=INFERENCE_CONFIG['half'],\r\n            device=INFERENCE_CONFIG['device'],\r\n            verbose=INFERENCE_CONFIG['verbose']\r\n        )[0]\r\n\r\n\r\n        detections = sv.Detections.from_ultralytics(result)\r\n\r\n\r\n        PERSON_CLASS_ID = 1\r\n        HELMET_CLASS_ID = 0\r\n\r\n        people_detections = detections[detections.class_id == PERSON_CLASS_ID]\r\n        helmet_detections = detections[detections.class_id == HELMET_CLASS_ID]\r\n\r\n        people_for_tracker = people_detections[people_detections.confidence > 0.3]\r\n        last_detections = tracker.update(people_for_tracker)\r\n    else:\r\n        pass\r\n\r\n\r\n    annotated = box_annotator.annotate(frame, last_detections)\r\n    if len(last_detections) > 0:\r\n        labels = []\r\n        for i, tid in enumerate(last_detections.tracker_id):\r\n            if last_detections.confidence[i] == 0:\r\n                labels.append(f\"ID {tid} (pred)\")\r\n            else:\r\n                labels.append(f\"ID {tid}\")\r\n\r\n        annotated = label_annotator.annotate(annotated, last_detections, labels=labels)\r\n\r\n    if roi is not None:\r\n        cv2.polylines(\r\n            annotated,\r\n            [np.array(roi, dtype=np.int32)],\r\n            True,\r\n            (0, 255, 255),\r\n            2,\r\n        )\r\n\r\n    now = time.perf_counter()\r\n    if prev_frame_time is not None:\r\n        elapsed = now - prev_frame_time\r\n        if elapsed > 0:\r\n            fps_inst = 1.0 / elapsed\r\n            fps_ema = fps_inst if fps_ema <= 0 else (0.9 * fps_ema + 0.1 * fps_inst)\r\n    prev_frame_time = now\r\n\r\n    fps_text = f\"FPS: {fps_ema:.1f}\" if fps_ema > 0 else \"FPS: --\"\r\n    cv2.putText(\r\n        annotated,\r\n        fps_text,\r\n        (10, 30),\r\n        cv2.FONT_HERSHEY_SIMPLEX,\r\n        0.8,\r\n        (0, 255, 255),\r\n        2,\r\n    )\r\n\r\n    display_frame = cv2.resize(annotated, (1920, 1080))\r\n    cv2.imshow('Yolo vision', display_frame)\r\n\r\n    key = cv2.waitKey(1) & 0xFF\r\n    if key == 27:\r\n        break\r\n    if key == ord(\"r\"):\r\n        new_roi = select_roi(frame)\r\n        if new_roi is not None:\r\n            roi = new_roi\r\n            save_roi(ROI_PATH, roi)\r\n\r\ncap.release()\r\ncv2.destroyAllWindows()\r\n\r\n\r\n\"\"\"\r\n\r\n        if not helmet_saved and len(detections) > 0:\r\n            det_numpy = detections.xyxy\r\n            import numpy as np\r\n            det_full = np.column_stack([\r\n                det_numpy,\r\n                detections.confidence,\r\n                detections.class_id\r\n            ])\r\n            helmets = extract_helmet_box(det_full, frame)\r\n            if len(helmets) > 0:\r\n                helmet_results = register_helmets(helmets, debug=False)\r\n                for h in helmet_results:\r\n                    print(f\"Helmet {h['bbox']}: Number={h['helmet_number']}, \"\r\n                          f\"OCR confidence={h['ocr_conf']:.1f}%\")\r\n                helmet_saved = True\r\n\"\"\"\r\n
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/main.py b/main.py
+--- a/main.py	(revision d2d63706dc31af88035cab8a481a76e8c9851079)
++++ b/main.py	(date 1772207238727)
+@@ -1,5 +1,6 @@
+ import cv2
+ import os
++data_path = os.path.join("videos", "Video.mov")
+ import time
+ import tkinter as tk
+ 
+@@ -21,7 +22,6 @@
+     'IMGSZ': 1280,
+ }
+ 
+-data_path = "DJI_20260211182952_0004_D.MP4"
+ conf_threshold = 0.3
+ frame_skip = 1
+ 
+@@ -29,9 +29,9 @@
+     'conf': conf_threshold,
+     'iou': 0.5,
+     'max_det': 300,
+-    'imgsz': 1280,
+-    'half': True,
+-    'device': 0,
++    'imgsz': 640,
++    'half': False,      # CPU → må være False
++    'device': 'cpu',    # ← viktig
+     'verbose': False,
+ }
+ 
+@@ -40,19 +40,27 @@
+ detector = HardwareDetector(config)
+ model = detector.initialize_model()
+ 
+-# Screen resolution for window sizing
++# screen resolution for window sizing
+ root = tk.Tk()
+ system_width = root.winfo_screenwidth()
+ system_height = root.winfo_screenheight()
+ root.destroy()
+ 
++print("CWD:", os.getcwd())
++abs_path = os.path.abspath(data_path)
++print("data_path:", data_path)
++print("abs_path:", abs_path)
++print("exists:", os.path.exists(abs_path))
++print("videos dir exists:", os.path.isdir("videos"))
++print("videos contents:", os.listdir("videos") if os.path.isdir("videos") else "NO videos dir")
+ # Open video
+-cap = cv2.VideoCapture(data_path)
++cap = cv2.VideoCapture(abs_path)
++print("cap.isOpened():", cap.isOpened())
+ fps = cap.get(cv2.CAP_PROP_FPS)
+ total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+ ret, preview_frame = cap.read()
+ if not ret:
+-    raise RuntimeError("Could not read initial frame for ROI.")
++ raise RuntimeError("Could not read initial frame for ROI.")
+ 
+ roi = load_roi(ROI_PATH)
+ if roi is None:
+@@ -63,8 +71,8 @@
+ 
+ cv2.namedWindow('Yolo vision', cv2.WINDOW_NORMAL)
+ 
+-# Initialize tracker
+-# BoxAnnotator draws the bounding boxes, LabelAnnotator draws the track ID.
++# initialisere tracker
++# boxannotator draws the bounding boxes, LabelAnnotator draws the track ID.
+ tracker = ByteTrackTracker(lost_track_buffer=150)
+ box_annotator = sv.BoxAnnotator()
+ label_annotator = sv.LabelAnnotator()
+Index: pipeline/__init__.py
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/pipeline/__init__.py b/pipeline/__init__.py
+new file mode 100644
+--- /dev/null	(date 1772193384784)
++++ b/pipeline/__init__.py	(date 1772193384784)
+@@ -0,0 +1,20 @@
++# pipeline/__init__.py
++#
++# Dette er det som gjør "pipeline"-mappa til en Python-pakke.
++# Uten denne filen ville ikke Python skjønne at mappa er en modul.
++#
++# Her eksporterer vi det som main.py faktisk trenger å importere.
++# Fordel: main.py kan skrive "from pipeline import AsyncFramePipeline"
++# i stedet for "from pipeline.async_pipeline import AsyncFramePipeline"
++#
++
++from pipeline.async_pipeline import AsyncFramePipeline, FrameItem
++from pipeline.inference_pipeline import DetectionItem
++from pipeline.tracking_pipeline import TrackingEvent
++
++__all__ = [
++    "AsyncFramePipeline",
++    "FrameItem",
++    "DetectionItem",
++    "TrackingEvent",
++]
+\ No newline at end of file
+Index: .idea/workspace.xml
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+><?xml version=\"1.0\" encoding=\"UTF-8\"?>\r\n<project version=\"4\">\r\n  <component name=\"AutoImportSettings\">\r\n    <option name=\"autoReloadType\" value=\"SELECTIVE\" />\r\n  </component>\r\n  <component name=\"ChangeListManager\">\r\n    <list default=\"true\" id=\"07fd18cc-2bca-4a2f-80af-2f0d24b97d14\" name=\"Changes\" comment=\"Added ROI (Region of Interest) for lesing av hjelmnummer\">\r\n      <change beforePath=\"$PROJECT_DIR$/.idea/workspace.xml\" beforeDir=\"false\" afterPath=\"$PROJECT_DIR$/.idea/workspace.xml\" afterDir=\"false\" />\r\n      <change beforePath=\"$PROJECT_DIR$/functions/BBExtractor.py\" beforeDir=\"false\" afterPath=\"$PROJECT_DIR$/functions/BBExtractor.py\" afterDir=\"false\" />\r\n      <change beforePath=\"$PROJECT_DIR$/functions/tensor_loader.py\" beforeDir=\"false\" afterPath=\"$PROJECT_DIR$/functions/tensor_loader.py\" afterDir=\"false\" />\r\n      <change beforePath=\"$PROJECT_DIR$/requirements.txt\" beforeDir=\"false\" afterPath=\"$PROJECT_DIR$/requirements.txt\" afterDir=\"false\" />\r\n    </list>\r\n    <option name=\"SHOW_DIALOG\" value=\"false\" />\r\n    <option name=\"HIGHLIGHT_CONFLICTS\" value=\"true\" />\r\n    <option name=\"HIGHLIGHT_NON_ACTIVE_CHANGELIST\" value=\"false\" />\r\n    <option name=\"LAST_RESOLUTION\" value=\"IGNORE\" />\r\n  </component>\r\n  <component name=\"EmbeddingIndexingInfo\">\r\n    <option name=\"cachedIndexableFilesCount\" value=\"52\" />\r\n    <option name=\"fileBasedEmbeddingIndicesEnabled\" value=\"true\" />\r\n  </component>\r\n  <component name=\"FileTemplateManagerImpl\">\r\n    <option name=\"RECENT_TEMPLATES\">\r\n      <list>\r\n        <option value=\"Python Script\" />\r\n      </list>\r\n    </option>\r\n  </component>\r\n  <component name=\"Git.Settings\">\r\n    <option name=\"PREVIOUS_COMMIT_AUTHORS\">\r\n      <list>\r\n        <option value=\"Dennis L &lt;dennis.lendi@gmail.com&gt;\" />\r\n      </list>\r\n    </option>\r\n    <option name=\"RECENT_BRANCH_BY_REPOSITORY\">\r\n      <map>\r\n        <entry key=\"$PROJECT_DIR$\" value=\"main\" />\r\n      </map>\r\n    </option>\r\n    <option name=\"RECENT_GIT_ROOT_PATH\" value=\"$PROJECT_DIR$\" />\r\n  </component>\r\n  <component name=\"GitHubPullRequestSearchHistory\">{\n  &quot;lastFilter&quot;: {\n    &quot;state&quot;: &quot;OPEN&quot;,\n    &quot;assignee&quot;: &quot;Delendtj&quot;\n  }\n}</component>\r\n  <component name=\"GithubPullRequestsUISettings\">{\n  &quot;selectedUrlAndAccountId&quot;: {\n    &quot;url&quot;: &quot;https://github.com/Delendtj/BOP3000.git&quot;,\n    &quot;accountId&quot;: &quot;ec1582f8-3c47-41cd-a2aa-085f20200b8b&quot;\n  }\n}</component>\r\n  <component name=\"McpProjectServerCommands\">\r\n    <commands />\r\n    <urls />\r\n  </component>\r\n  <component name=\"ProblemsViewState\">\r\n    <option name=\"selectedTabId\" value=\"CurrentFile\" />\r\n  </component>\r\n  <component name=\"ProjectColorInfo\">{\n  &quot;associatedIndex&quot;: 2\n}</component>\r\n  <component name=\"ProjectId\" id=\"38KwgkewjnhVZEgmIaVTkV1pjXv\" />\r\n  <component name=\"ProjectViewState\">\r\n    <option name=\"hideEmptyMiddlePackages\" value=\"true\" />\r\n    <option name=\"showLibraryContents\" value=\"true\" />\r\n  </component>\r\n  <component name=\"PropertiesComponent\"><![CDATA[{\n  \"keyToString\": {\n    \"ModuleVcsDetector.initialDetectionPerformed\": \"true\",\n    \"Python.BBExtractor.executor\": \"Run\",\n    \"Python.CUDA.executor\": \"Run\",\n    \"Python.Hardware_Detector.executor\": \"Run\",\n    \"Python.Main ONNX_CUDA.executor\": \"Run\",\n    \"Python.Main_onnx_cuda.executor\": \"Run\",\n    \"Python.Model converter.executor\": \"Run\",\n    \"Python.compare.executor\": \"Run\",\n    \"Python.main.executor\": \"Run\",\n    \"Python.main_openvino.executor\": \"Run\",\n    \"Python.model_converter.executor\": \"Run\",\n    \"Python.new.executor\": \"Run\",\n    \"Python.register_helmet.executor\": \"Run\",\n    \"Python.roi.executor\": \"Run\",\n    \"Python.tensor_loader.executor\": \"Run\",\n    \"Python.test.executor\": \"Run\",\n    \"Python.test_ocr_folders.executor\": \"Run\",\n    \"RunOnceActivity.MCP Project settings loaded\": \"true\",\n    \"RunOnceActivity.ShowReadmeOnStart\": \"true\",\n    \"RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252\": \"true\",\n    \"RunOnceActivity.git.unshallow\": \"true\",\n    \"RunOnceActivity.typescript.service.memoryLimit.init\": \"true\",\n    \"SHARE_PROJECT_CONFIGURATION_FILES\": \"true\",\n    \"ai.playground.ignore.import.keys.banner.in.settings\": \"true\",\n    \"git-widget-placeholder\": \"main\",\n    \"last_opened_file_path\": \"C:/Users/Dennis/Desktop/python/BOP3000\",\n    \"node.js.detected.package.eslint\": \"true\",\n    \"node.js.selected.package.eslint\": \"(autodetect)\",\n    \"node.js.selected.package.tslint\": \"(autodetect)\",\n    \"nodejs_package_manager_path\": \"npm\",\n    \"settings.editor.selected.configurable\": \"ml.llm.LLMConfigurable\",\n    \"vue.rearranger.settings.migration\": \"true\"\n  }\n}]]></component>\r\n  <component name=\"RecentsManager\">\r\n    <key name=\"CopyFile.RECENT_KEYS\">\r\n      <recent name=\"C:\\Users\\Dennis\\Desktop\\python\\BOP3000\" />\r\n      <recent name=\"C:\\Users\\Dennis\\Desktop\\python\\BOP3000\\models\" />\r\n      <recent name=\"C:\\Users\\denni\\Desktop\\Python\\SpeedSkate\" />\r\n      <recent name=\"C:\\Users\\denni\\Desktop\\Python\\SpeedSkate\\models\" />\r\n      <recent name=\"C:\\Users\\Dennis\\Desktop\\python\\bop3000\\models\" />\r\n    </key>\r\n    <key name=\"MoveFile.RECENT_KEYS\">\r\n      <recent name=\"C:\\Users\\denni\\Desktop\\Python\\SpeedSkate\\functions\" />\r\n      <recent name=\"C:\\Users\\Dennis\\Desktop\\python\\bop3000\\Old\" />\r\n      <recent name=\"C:\\Users\\Dennis\\Desktop\\python\\bop3000\" />\r\n      <recent name=\"C:\\Users\\denni\\Desktop\\Python\\SpeedSkate\\utilities\" />\r\n      <recent name=\"C:\\Users\\denni\\Desktop\\Python\\SpeedSkate\" />\r\n    </key>\r\n  </component>\r\n  <component name=\"RunAnythingCache\">\r\n    <option name=\"myCommands\">\r\n      <command value=\"pip install -r requirements.txt\" />\r\n    </option>\r\n  </component>\r\n  <component name=\"RunManager\">\r\n    <configuration default=\"true\" type=\"PythonConfigurationType\" factoryName=\"Python\">\r\n      <module name=\"SpeedSkate\" />\r\n      <option name=\"ENV_FILES\" value=\"\" />\r\n      <option name=\"INTERPRETER_OPTIONS\" value=\"\" />\r\n      <option name=\"PARENT_ENVS\" value=\"true\" />\r\n      <envs>\r\n        <env name=\"PYTHONUNBUFFERED\" value=\"1\" />\r\n      </envs>\r\n      <option name=\"SDK_HOME\" value=\"\" />\r\n      <option name=\"WORKING_DIRECTORY\" value=\"\" />\r\n      <option name=\"IS_MODULE_SDK\" value=\"false\" />\r\n      <option name=\"ADD_CONTENT_ROOTS\" value=\"true\" />\r\n      <option name=\"ADD_SOURCE_ROOTS\" value=\"true\" />\r\n      <EXTENSION ID=\"PythonCoverageRunConfigurationExtension\" runner=\"coverage.py\" />\r\n      <option name=\"RUN_TOOL\" value=\"\" />\r\n      <option name=\"SCRIPT_NAME\" value=\"\" />\r\n      <option name=\"PARAMETERS\" value=\"\" />\r\n      <option name=\"SHOW_COMMAND_LINE\" value=\"false\" />\r\n      <option name=\"EMULATE_TERMINAL\" value=\"false\" />\r\n      <option name=\"MODULE_MODE\" value=\"false\" />\r\n      <option name=\"REDIRECT_INPUT\" value=\"false\" />\r\n      <option name=\"INPUT_FILE\" value=\"\" />\r\n      <method v=\"2\" />\r\n    </configuration>\r\n    <configuration default=\"true\" type=\"tests\" factoryName=\"Autodetect\">\r\n      <module name=\"SpeedSkate\" />\r\n      <option name=\"ENV_FILES\" value=\"\" />\r\n      <option name=\"INTERPRETER_OPTIONS\" value=\"\" />\r\n      <option name=\"PARENT_ENVS\" value=\"true\" />\r\n      <option name=\"SDK_HOME\" value=\"\" />\r\n      <option name=\"WORKING_DIRECTORY\" value=\"\" />\r\n      <option name=\"IS_MODULE_SDK\" value=\"false\" />\r\n      <option name=\"ADD_CONTENT_ROOTS\" value=\"true\" />\r\n      <option name=\"ADD_SOURCE_ROOTS\" value=\"true\" />\r\n      <EXTENSION ID=\"PythonCoverageRunConfigurationExtension\" runner=\"coverage.py\" />\r\n      <option name=\"RUN_TOOL\" value=\"\" />\r\n      <option name=\"_new_additionalArguments\" value=\"&quot;&quot;\" />\r\n      <option name=\"_new_target\" value=\"&quot;&quot;\" />\r\n      <option name=\"_new_targetType\" value=\"&quot;PATH&quot;\" />\r\n      <method v=\"2\" />\r\n    </configuration>\r\n    <configuration default=\"true\" type=\"tests\" factoryName=\"Doctests\">\r\n      <module name=\"SpeedSkate\" />\r\n      <option name=\"ENV_FILES\" value=\"\" />\r\n      <option name=\"INTERPRETER_OPTIONS\" value=\"\" />\r\n      <option name=\"PARENT_ENVS\" value=\"true\" />\r\n      <option name=\"SDK_HOME\" value=\"\" />\r\n      <option name=\"WORKING_DIRECTORY\" value=\"\" />\r\n      <option name=\"IS_MODULE_SDK\" value=\"false\" />\r\n      <option name=\"ADD_CONTENT_ROOTS\" value=\"true\" />\r\n      <option name=\"ADD_SOURCE_ROOTS\" value=\"true\" />\r\n      <EXTENSION ID=\"PythonCoverageRunConfigurationExtension\" runner=\"coverage.py\" />\r\n      <option name=\"RUN_TOOL\" value=\"\" />\r\n      <option name=\"SCRIPT_NAME\" value=\"\" />\r\n      <option name=\"CLASS_NAME\" value=\"\" />\r\n      <option name=\"METHOD_NAME\" value=\"\" />\r\n      <option name=\"FOLDER_NAME\" value=\"\" />\r\n      <option name=\"TEST_TYPE\" value=\"TEST_SCRIPT\" />\r\n      <option name=\"PATTERN\" value=\"\" />\r\n      <option name=\"USE_PATTERN\" value=\"false\" />\r\n      <method v=\"2\" />\r\n    </configuration>\r\n  </component>\r\n  <component name=\"SharedIndexes\">\r\n    <attachedChunks>\r\n      <set>\r\n        <option value=\"bundled-js-predefined-d6986cc7102b-9b0f141eb926-JavaScript-PY-253.31033.139\" />\r\n        <option value=\"bundled-python-sdk-2653e85de345-6d6dccd035ac-com.jetbrains.pycharm.pro.sharedIndexes.bundled-PY-253.31033.139\" />\r\n      </set>\r\n    </attachedChunks>\r\n  </component>\r\n  <component name=\"TaskManager\">\r\n    <task active=\"true\" id=\"Default\" summary=\"Default task\">\r\n      <changelist id=\"07fd18cc-2bca-4a2f-80af-2f0d24b97d14\" name=\"Changes\" comment=\"\" />\r\n      <created>1768561684044</created>\r\n      <option name=\"number\" value=\"Default\" />\r\n      <option name=\"presentableId\" value=\"Default\" />\r\n      <updated>1768561684044</updated>\r\n      <workItem from=\"1768561685092\" duration=\"139000\" />\r\n      <workItem from=\"1768562564251\" duration=\"932000\" />\r\n      <workItem from=\"1768563556724\" duration=\"3266000\" />\r\n      <workItem from=\"1768823017087\" duration=\"475000\" />\r\n      <workItem from=\"1768824651955\" duration=\"10277000\" />\r\n      <workItem from=\"1768988323434\" duration=\"7746000\" />\r\n      <workItem from=\"1769000815533\" duration=\"725000\" />\r\n      <workItem from=\"1769001570196\" duration=\"1678000\" />\r\n      <workItem from=\"1769079589543\" duration=\"829000\" />\r\n      <workItem from=\"1769080810761\" duration=\"9281000\" />\r\n      <workItem from=\"1769134126260\" duration=\"1564000\" />\r\n      <workItem from=\"1769202124905\" duration=\"7033000\" />\r\n      <workItem from=\"1769345872808\" duration=\"1841000\" />\r\n      <workItem from=\"1769421115134\" duration=\"4908000\" />\r\n      <workItem from=\"1769430982582\" duration=\"663000\" />\r\n      <workItem from=\"1769433931647\" duration=\"12424000\" />\r\n      <workItem from=\"1770034725873\" duration=\"217000\" />\r\n      <workItem from=\"1770035059623\" duration=\"2691000\" />\r\n      <workItem from=\"1770041766006\" duration=\"129000\" />\r\n      <workItem from=\"1770469470586\" duration=\"3935000\" />\r\n      <workItem from=\"1770975334557\" duration=\"14775000\" />\r\n      <workItem from=\"1771760015614\" duration=\"753000\" />\r\n      <workItem from=\"1771763554982\" duration=\"1629000\" />\r\n      <workItem from=\"1771765283851\" duration=\"10078000\" />\r\n      <workItem from=\"1771775914195\" duration=\"230000\" />\r\n      <workItem from=\"1771858103712\" duration=\"11666000\" />\r\n      <workItem from=\"1771896852188\" duration=\"3868000\" />\r\n      <workItem from=\"1771932695569\" duration=\"3059000\" />\r\n      <workItem from=\"1771974363442\" duration=\"1695000\" />\r\n      <workItem from=\"1772026231521\" duration=\"11383000\" />\r\n      <workItem from=\"1772046897880\" duration=\"91000\" />\r\n      <workItem from=\"1772110588558\" duration=\"1676000\" />\r\n      <workItem from=\"1772112541243\" duration=\"6538000\" />\r\n    </task>\r\n    <task id=\"LOCAL-00001\" summary=\"Added Trained model\">\r\n      <option name=\"closed\" value=\"true\" />\r\n      <created>1769001712154</created>\r\n      <option name=\"number\" value=\"00001\" />\r\n      <option name=\"presentableId\" value=\"LOCAL-00001\" />\r\n      <option name=\"project\" value=\"LOCAL\" />\r\n      <updated>1769001712154</updated>\r\n    </task>\r\n    <task id=\"LOCAL-00002\" summary=\"Refactored file name for openvino and cuda scripts\">\r\n      <option name=\"closed\" value=\"true\" />\r\n      <created>1769348580164</created>\r\n      <option name=\"number\" value=\"00002\" />\r\n      <option name=\"presentableId\" value=\"LOCAL-00002\" />\r\n      <option name=\"project\" value=\"LOCAL\" />\r\n      <updated>1769348580164</updated>\r\n    </task>\r\n    <task id=\"LOCAL-00003\" summary=\"Updated requirements.txt\">\r\n      <option name=\"closed\" value=\"true\" />\r\n      <created>1769424999156</created>\r\n      <option name=\"number\" value=\"00003\" />\r\n      <option name=\"presentableId\" value=\"LOCAL-00003\" />\r\n      <option name=\"project\" value=\"LOCAL\" />\r\n      <updated>1769424999156</updated>\r\n    </task>\r\n    <task id=\"LOCAL-00004\" summary=\"added cv2 to requirements.txt\">\r\n      <option name=\"closed\" value=\"true\" />\r\n      <created>1769431396605</created>\r\n      <option name=\"number\" value=\"00004\" />\r\n      <option name=\"presentableId\" value=\"LOCAL-00004\" />\r\n      <option name=\"project\" value=\"LOCAL\" />\r\n      <updated>1769431396605</updated>\r\n    </task>\r\n    <task id=\"LOCAL-00005\" summary=\"Refactored file structure, stashed deprecated code, added Hardware_Detector.py and Tensor_loader.py.\">\r\n      <option name=\"closed\" value=\"true\" />\r\n      <created>1770036432636</created>\r\n      <option name=\"number\" value=\"00005\" />\r\n      <option name=\"presentableId\" value=\"LOCAL-00005\" />\r\n      <option name=\"project\" value=\"LOCAL\" />\r\n      <updated>1770036432636</updated>\r\n    </task>\r\n    <task id=\"LOCAL-00006\" summary=\"changed backend to YOLO from RAW\">\r\n      <option name=\"closed\" value=\"true\" />\r\n      <created>1770983305295</created>\r\n      <option name=\"number\" value=\"00006\" />\r\n      <option name=\"presentableId\" value=\"LOCAL-00006\" />\r\n      <option name=\"project\" value=\"LOCAL\" />\r\n      <updated>1770983305295</updated>\r\n    </task>\r\n    <task id=\"LOCAL−00007\" summary=\"Merge remote-tracking branch 'origin/yolobackend'&#10;&#10;viktig: &#10;Backend er bytta til YOLO&#10;Trackers fra Roboflow istedenfor boxmot&#10;Modell input fra 640 - 1280 (kanbskje 1920?)&#10;fjerna BBE og OCR funksjon atm\">\r\n      <option name=\"closed\" value=\"true\" />\r\n      <created>1771775738775</created>\r\n      <option name=\"number\" value=\"LOCAL−00007\" />\r\n      <option name=\"presentableId\" value=\"LOCAL−00007\" />\r\n      <updated>1771775738775</updated>\r\n    </task>\r\n    <task id=\"LOCAL−00008\" summary=\"Updated Tracking with 1280x1280 model&#10;&#10;added predicted frames on draw&#10;&#10;commented out helm reader again\">\r\n      <option name=\"closed\" value=\"true\" />\r\n      <created>1771871645450</created>\r\n      <option name=\"number\" value=\"LOCAL−00008\" />\r\n      <option name=\"presentableId\" value=\"LOCAL−00008\" />\r\n      <updated>1771871645450</updated>\r\n    </task>\r\n    <task id=\"LOCAL−00009\" summary=\"Added ROI (Region of Interest) for lesing av hjelmnummer\">\r\n      <option name=\"closed\" value=\"true\" />\r\n      <created>1772117570667</created>\r\n      <option name=\"number\" value=\"LOCAL−00009\" />\r\n      <option name=\"presentableId\" value=\"LOCAL−00009\" />\r\n      <updated>1772117570667</updated>\r\n    </task>\r\n    <option name=\"localTasksCounter\" value=\"10\" />\r\n    <servers />\r\n  </component>\r\n  <component name=\"TypeScriptGeneratedFilesManager\">\r\n    <option name=\"version\" value=\"3\" />\r\n  </component>\r\n  <component name=\"Vcs.Log.Tabs.Properties\">\r\n    <option name=\"TAB_STATES\">\r\n      <map>\r\n        <entry key=\"MAIN\">\r\n          <value>\r\n            <State />\r\n          </value>\r\n        </entry>\r\n      </map>\r\n    </option>\r\n  </component>\r\n  <component name=\"VcsManagerConfiguration\">\r\n    <MESSAGE value=\"Added Trained model\" />\r\n    <MESSAGE value=\"Refactored file name for openvino and cuda scripts\" />\r\n    <MESSAGE value=\"Updated requirements.txt\" />\r\n    <MESSAGE value=\"added cv2 to requirements.txt\" />\r\n    <MESSAGE value=\"Refactored file structure, stashed deprecated code, added Hardware_Detector.py and Tensor_loader.py.\" />\r\n    <MESSAGE value=\"changed backend to YOLO from RAW\" />\r\n    <MESSAGE value=\"Merge remote-tracking branch 'origin/yolobackend'&#10;&#10;# Conflicts:&#10;#&#9;.idea/Project.iml&#10;#&#9;.idea/misc.xml&#10;#&#9;.idea/workspace.xml&#10;#&#9;main.py\" />\r\n    <MESSAGE value=\"Merge remote-tracking branch 'origin/yolobackend'&#10;&#10;viktig: &#10;Backend er bytta til YOLO&#10;Trackers fra Roboflow istedenfor boxmot&#10;Modell input fra 640 - 1280 (kanbskje 1920?)&#10;fjerna BBE og OCR funksjon atm\" />\r\n    <MESSAGE value=\"Merge pull request #10 from Delendtj/mine-endringer&#10;&#10;Add setup dependencies integration\" />\r\n    <MESSAGE value=\"Updated Tracking with 1280x1280 model&#10;&#10;added predicted frames on draw&#10;&#10;commented out helm reader again\" />\r\n    <MESSAGE value=\"Added ROI (Region of Interest) for lesing av hjelmnummer\" />\r\n    <option name=\"LAST_COMMIT_MESSAGE\" value=\"Added ROI (Region of Interest) for lesing av hjelmnummer\" />\r\n  </component>\r\n  <component name=\"com.intellij.coverage.CoverageDataManagerImpl\">\r\n    <SUITE FILE_PATH=\"coverage/SpeedSkate$main.coverage\" NAME=\"main Coverage Results\" MODIFIED=\"1770992427728\" SOURCE_PROVIDER=\"com.intellij.coverage.DefaultCoverageFileProvider\" RUNNER=\"coverage.py\" COVERAGE_BY_TEST_ENABLED=\"false\" COVERAGE_TRACING_ENABLED=\"false\" WORKING_DIRECTORY=\"$PROJECT_DIR$\" />\r\n    <SUITE FILE_PATH=\"coverage/bop3000$test.coverage\" NAME=\"test Coverage Results\" MODIFIED=\"1770905772857\" SOURCE_PROVIDER=\"com.intellij.coverage.DefaultCoverageFileProvider\" RUNNER=\"coverage.py\" COVERAGE_BY_TEST_ENABLED=\"false\" COVERAGE_TRACING_ENABLED=\"false\" WORKING_DIRECTORY=\"$PROJECT_DIR$\" />\r\n    <SUITE FILE_PATH=\"coverage/SpeedSkate$main_openvino.coverage\" NAME=\"main_openvino Coverage Results\" MODIFIED=\"1769767686322\" SOURCE_PROVIDER=\"com.intellij.coverage.DefaultCoverageFileProvider\" RUNNER=\"coverage.py\" COVERAGE_BY_TEST_ENABLED=\"false\" COVERAGE_TRACING_ENABLED=\"false\" WORKING_DIRECTORY=\"$PROJECT_DIR$\" />\r\n    <SUITE FILE_PATH=\"coverage/BOP3000$register_helmet.coverage\" NAME=\"register_helmet Coverage Results\" MODIFIED=\"1772116858718\" SOURCE_PROVIDER=\"com.intellij.coverage.DefaultCoverageFileProvider\" RUNNER=\"coverage.py\" COVERAGE_BY_TEST_ENABLED=\"false\" COVERAGE_TRACING_ENABLED=\"false\" WORKING_DIRECTORY=\"$PROJECT_DIR$/functions\" />\r\n    <SUITE FILE_PATH=\"coverage/SpeedSkate$Hardware_Detector.coverage\" NAME=\"Hardware_Detector Coverage Results\" MODIFIED=\"1769516971158\" SOURCE_PROVIDER=\"com.intellij.coverage.DefaultCoverageFileProvider\" RUNNER=\"coverage.py\" COVERAGE_BY_TEST_ENABLED=\"false\" COVERAGE_TRACING_ENABLED=\"false\" WORKING_DIRECTORY=\"$PROJECT_DIR$\" />\r\n    <SUITE FILE_PATH=\"coverage/BOP3000$roi.coverage\" NAME=\"roi Coverage Results\" MODIFIED=\"1772114668573\" SOURCE_PROVIDER=\"com.intellij.coverage.DefaultCoverageFileProvider\" RUNNER=\"coverage.py\" COVERAGE_BY_TEST_ENABLED=\"false\" COVERAGE_TRACING_ENABLED=\"false\" WORKING_DIRECTORY=\"$PROJECT_DIR$/functions\" />\r\n    <SUITE FILE_PATH=\"coverage/BOP3000$main.coverage\" NAME=\"main Coverage Results\" MODIFIED=\"1772118353462\" SOURCE_PROVIDER=\"com.intellij.coverage.DefaultCoverageFileProvider\" RUNNER=\"coverage.py\" COVERAGE_BY_TEST_ENABLED=\"false\" COVERAGE_TRACING_ENABLED=\"false\" WORKING_DIRECTORY=\"$PROJECT_DIR$\" />\r\n    <SUITE FILE_PATH=\"coverage/bop3000$Model_converter.coverage\" NAME=\"Model converter Coverage Results\" MODIFIED=\"1769347466605\" SOURCE_PROVIDER=\"com.intellij.coverage.DefaultCoverageFileProvider\" RUNNER=\"coverage.py\" COVERAGE_BY_TEST_ENABLED=\"false\" COVERAGE_TRACING_ENABLED=\"false\" WORKING_DIRECTORY=\"$PROJECT_DIR$\" />\r\n    <SUITE FILE_PATH=\"coverage/BOP3000$test_ocr_folders.coverage\" NAME=\"test_ocr_folders Coverage Results\" MODIFIED=\"1772032934859\" SOURCE_PROVIDER=\"com.intellij.coverage.DefaultCoverageFileProvider\" RUNNER=\"coverage.py\" COVERAGE_BY_TEST_ENABLED=\"false\" COVERAGE_TRACING_ENABLED=\"false\" WORKING_DIRECTORY=\"$PROJECT_DIR$\" />\r\n    <SUITE FILE_PATH=\"coverage/SpeedSkate$BBExtractor.coverage\" NAME=\"BBExtractor Coverage Results\" MODIFIED=\"1770992217418\" SOURCE_PROVIDER=\"com.intellij.coverage.DefaultCoverageFileProvider\" RUNNER=\"coverage.py\" COVERAGE_BY_TEST_ENABLED=\"false\" COVERAGE_TRACING_ENABLED=\"false\" WORKING_DIRECTORY=\"$PROJECT_DIR$/functions\" />\r\n    <SUITE FILE_PATH=\"coverage/BOP3000$model_converter.coverage\" NAME=\"model_converter Coverage Results\" MODIFIED=\"1771775348488\" SOURCE_PROVIDER=\"com.intellij.coverage.DefaultCoverageFileProvider\" RUNNER=\"coverage.py\" COVERAGE_BY_TEST_ENABLED=\"false\" COVERAGE_TRACING_ENABLED=\"false\" WORKING_DIRECTORY=\"$PROJECT_DIR$/utilities\" />\r\n    <SUITE FILE_PATH=\"coverage/bop3000$CUDA.coverage\" NAME=\"CUDA Coverage Results\" MODIFIED=\"1769347323632\" SOURCE_PROVIDER=\"com.intellij.coverage.DefaultCoverageFileProvider\" RUNNER=\"coverage.py\" COVERAGE_BY_TEST_ENABLED=\"false\" COVERAGE_TRACING_ENABLED=\"false\" WORKING_DIRECTORY=\"$PROJECT_DIR$/main ONNX\" />\r\n    <SUITE FILE_PATH=\"coverage/SpeedSkate$Main_onnx_cuda.coverage\" NAME=\"Main_onnx_cuda Coverage Results\" MODIFIED=\"1769424055572\" SOURCE_PROVIDER=\"com.intellij.coverage.DefaultCoverageFileProvider\" RUNNER=\"coverage.py\" COVERAGE_BY_TEST_ENABLED=\"false\" COVERAGE_TRACING_ENABLED=\"false\" WORKING_DIRECTORY=\"$PROJECT_DIR$\" />\r\n    <SUITE FILE_PATH=\"coverage/SpeedSkate$model_converter.coverage\" NAME=\"model_converter Coverage Results\" MODIFIED=\"1770981432425\" SOURCE_PROVIDER=\"com.intellij.coverage.DefaultCoverageFileProvider\" RUNNER=\"coverage.py\" COVERAGE_BY_TEST_ENABLED=\"false\" COVERAGE_TRACING_ENABLED=\"false\" WORKING_DIRECTORY=\"$PROJECT_DIR$/utilities\" />\r\n    <SUITE FILE_PATH=\"coverage/SpeedSkate$compare.coverage\" NAME=\"compare Coverage Results\" MODIFIED=\"1769202527678\" SOURCE_PROVIDER=\"com.intellij.coverage.DefaultCoverageFileProvider\" RUNNER=\"coverage.py\" COVERAGE_BY_TEST_ENABLED=\"false\" COVERAGE_TRACING_ENABLED=\"false\" WORKING_DIRECTORY=\"$PROJECT_DIR$\" />\r\n    <SUITE FILE_PATH=\"coverage/BOP3000$tensor_loader.coverage\" NAME=\"tensor_loader Coverage Results\" MODIFIED=\"1772118225367\" SOURCE_PROVIDER=\"com.intellij.coverage.DefaultCoverageFileProvider\" RUNNER=\"coverage.py\" COVERAGE_BY_TEST_ENABLED=\"false\" COVERAGE_TRACING_ENABLED=\"false\" WORKING_DIRECTORY=\"$PROJECT_DIR$/functions\" />\r\n    <SUITE FILE_PATH=\"coverage/bop3000$Main_ONNX_CUDA.coverage\" NAME=\"Main ONNX_CUDA Coverage Results\" MODIFIED=\"1769347351598\" SOURCE_PROVIDER=\"com.intellij.coverage.DefaultCoverageFileProvider\" RUNNER=\"coverage.py\" COVERAGE_BY_TEST_ENABLED=\"false\" COVERAGE_TRACING_ENABLED=\"false\" WORKING_DIRECTORY=\"$PROJECT_DIR$\" />\r\n    <SUITE FILE_PATH=\"coverage/bop3000$compare.coverage\" NAME=\"compare Coverage Results\" MODIFIED=\"1769347015739\" SOURCE_PROVIDER=\"com.intellij.coverage.DefaultCoverageFileProvider\" RUNNER=\"coverage.py\" COVERAGE_BY_TEST_ENABLED=\"false\" COVERAGE_TRACING_ENABLED=\"false\" WORKING_DIRECTORY=\"$PROJECT_DIR$\" />\r\n    <SUITE FILE_PATH=\"coverage/bop3000$model_converter.coverage\" NAME=\"model_converter Coverage Results\" MODIFIED=\"1770905804642\" SOURCE_PROVIDER=\"com.intellij.coverage.DefaultCoverageFileProvider\" RUNNER=\"coverage.py\" COVERAGE_BY_TEST_ENABLED=\"false\" COVERAGE_TRACING_ENABLED=\"false\" WORKING_DIRECTORY=\"$PROJECT_DIR$/utilities\" />\r\n    <SUITE FILE_PATH=\"coverage/BOP3000$compare.coverage\" NAME=\"compare Coverage Results\" MODIFIED=\"1771867105577\" SOURCE_PROVIDER=\"com.intellij.coverage.DefaultCoverageFileProvider\" RUNNER=\"coverage.py\" COVERAGE_BY_TEST_ENABLED=\"false\" COVERAGE_TRACING_ENABLED=\"false\" WORKING_DIRECTORY=\"$PROJECT_DIR$/utilities\" />\r\n    <SUITE FILE_PATH=\"coverage/bop3000$main.coverage\" NAME=\"main Coverage Results\" MODIFIED=\"1770910968836\" SOURCE_PROVIDER=\"com.intellij.coverage.DefaultCoverageFileProvider\" RUNNER=\"coverage.py\" COVERAGE_BY_TEST_ENABLED=\"false\" COVERAGE_TRACING_ENABLED=\"false\" WORKING_DIRECTORY=\"$PROJECT_DIR$\" />\r\n    <SUITE FILE_PATH=\"coverage/SpeedSkate$new.coverage\" NAME=\"new Coverage Results\" MODIFIED=\"1769171422118\" SOURCE_PROVIDER=\"com.intellij.coverage.DefaultCoverageFileProvider\" RUNNER=\"coverage.py\" COVERAGE_BY_TEST_ENABLED=\"false\" COVERAGE_TRACING_ENABLED=\"false\" WORKING_DIRECTORY=\"$PROJECT_DIR$\" />\r\n  </component>\r\n</project>
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/.idea/workspace.xml b/.idea/workspace.xml
+--- a/.idea/workspace.xml	(revision d2d63706dc31af88035cab8a481a76e8c9851079)
++++ b/.idea/workspace.xml	(date 1772200062160)
+@@ -5,10 +5,15 @@
+   </component>
+   <component name="ChangeListManager">
+     <list default="true" id="07fd18cc-2bca-4a2f-80af-2f0d24b97d14" name="Changes" comment="Added ROI (Region of Interest) for lesing av hjelmnummer">
++      <change afterPath="$PROJECT_DIR$/pipeline/__init__.py" afterDir="false" />
++      <change afterPath="$PROJECT_DIR$/pipeline/inference_pipeline.py" afterDir="false" />
++      <change afterPath="$PROJECT_DIR$/pipeline/output_pipeline.py" afterDir="false" />
++      <change afterPath="$PROJECT_DIR$/pipeline/tracking_pipeline.py" afterDir="false" />
++      <change beforePath="$PROJECT_DIR$/.idea/Project.iml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/Project.iml" afterDir="false" />
++      <change beforePath="$PROJECT_DIR$/.idea/misc.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/misc.xml" afterDir="false" />
+       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
+-      <change beforePath="$PROJECT_DIR$/functions/BBExtractor.py" beforeDir="false" afterPath="$PROJECT_DIR$/functions/BBExtractor.py" afterDir="false" />
+-      <change beforePath="$PROJECT_DIR$/functions/tensor_loader.py" beforeDir="false" afterPath="$PROJECT_DIR$/functions/tensor_loader.py" afterDir="false" />
+-      <change beforePath="$PROJECT_DIR$/requirements.txt" beforeDir="false" afterPath="$PROJECT_DIR$/requirements.txt" afterDir="false" />
++      <change beforePath="$PROJECT_DIR$/main.py" beforeDir="false" afterPath="$PROJECT_DIR$/main.py" afterDir="false" />
++      <change beforePath="$PROJECT_DIR$/pipeline/async_pipeline.py" beforeDir="false" afterPath="$PROJECT_DIR$/pipeline/async_pipeline.py" afterDir="false" />
+     </list>
+     <option name="SHOW_DIALOG" value="false" />
+     <option name="HIGHLIGHT_CONFLICTS" value="true" />
+@@ -17,7 +22,6 @@
+   </component>
+   <component name="EmbeddingIndexingInfo">
+     <option name="cachedIndexableFilesCount" value="52" />
+-    <option name="fileBasedEmbeddingIndicesEnabled" value="true" />
+   </component>
+   <component name="FileTemplateManagerImpl">
+     <option name="RECENT_TEMPLATES">
+@@ -48,7 +52,7 @@
+   <component name="GithubPullRequestsUISettings">{
+   &quot;selectedUrlAndAccountId&quot;: {
+     &quot;url&quot;: &quot;https://github.com/Delendtj/BOP3000.git&quot;,
+-    &quot;accountId&quot;: &quot;ec1582f8-3c47-41cd-a2aa-085f20200b8b&quot;
++    &quot;accountId&quot;: &quot;b8f35386-01d4-40e3-b1b5-d31f0ed8f795&quot;
+   }
+ }</component>
+   <component name="McpProjectServerCommands">
+@@ -66,42 +70,45 @@
+     <option name="hideEmptyMiddlePackages" value="true" />
+     <option name="showLibraryContents" value="true" />
+   </component>
+-  <component name="PropertiesComponent"><![CDATA[{
+-  "keyToString": {
+-    "ModuleVcsDetector.initialDetectionPerformed": "true",
+-    "Python.BBExtractor.executor": "Run",
+-    "Python.CUDA.executor": "Run",
+-    "Python.Hardware_Detector.executor": "Run",
+-    "Python.Main ONNX_CUDA.executor": "Run",
+-    "Python.Main_onnx_cuda.executor": "Run",
+-    "Python.Model converter.executor": "Run",
+-    "Python.compare.executor": "Run",
+-    "Python.main.executor": "Run",
+-    "Python.main_openvino.executor": "Run",
+-    "Python.model_converter.executor": "Run",
+-    "Python.new.executor": "Run",
+-    "Python.register_helmet.executor": "Run",
+-    "Python.roi.executor": "Run",
+-    "Python.tensor_loader.executor": "Run",
+-    "Python.test.executor": "Run",
+-    "Python.test_ocr_folders.executor": "Run",
+-    "RunOnceActivity.MCP Project settings loaded": "true",
+-    "RunOnceActivity.ShowReadmeOnStart": "true",
+-    "RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252": "true",
+-    "RunOnceActivity.git.unshallow": "true",
+-    "RunOnceActivity.typescript.service.memoryLimit.init": "true",
+-    "SHARE_PROJECT_CONFIGURATION_FILES": "true",
+-    "ai.playground.ignore.import.keys.banner.in.settings": "true",
+-    "git-widget-placeholder": "main",
+-    "last_opened_file_path": "C:/Users/Dennis/Desktop/python/BOP3000",
+-    "node.js.detected.package.eslint": "true",
+-    "node.js.selected.package.eslint": "(autodetect)",
+-    "node.js.selected.package.tslint": "(autodetect)",
+-    "nodejs_package_manager_path": "npm",
+-    "settings.editor.selected.configurable": "ml.llm.LLMConfigurable",
+-    "vue.rearranger.settings.migration": "true"
++  <component name="PropertiesComponent">{
++  &quot;keyToString&quot;: {
++    &quot;ModuleVcsDetector.initialDetectionPerformed&quot;: &quot;true&quot;,
++    &quot;Python.BBExtractor.executor&quot;: &quot;Run&quot;,
++    &quot;Python.CUDA.executor&quot;: &quot;Run&quot;,
++    &quot;Python.Hardware_Detector.executor&quot;: &quot;Run&quot;,
++    &quot;Python.Main ONNX_CUDA.executor&quot;: &quot;Run&quot;,
++    &quot;Python.Main_onnx_cuda.executor&quot;: &quot;Run&quot;,
++    &quot;Python.Model converter.executor&quot;: &quot;Run&quot;,
++    &quot;Python.compare.executor&quot;: &quot;Run&quot;,
++    &quot;Python.main.executor&quot;: &quot;Run&quot;,
++    &quot;Python.main_openvino.executor&quot;: &quot;Run&quot;,
++    &quot;Python.model_converter.executor&quot;: &quot;Run&quot;,
++    &quot;Python.new.executor&quot;: &quot;Run&quot;,
++    &quot;Python.register_helmet.executor&quot;: &quot;Run&quot;,
++    &quot;Python.roi.executor&quot;: &quot;Run&quot;,
++    &quot;Python.tensor_loader.executor&quot;: &quot;Run&quot;,
++    &quot;Python.test.executor&quot;: &quot;Run&quot;,
++    &quot;Python.test_ocr_folders.executor&quot;: &quot;Run&quot;,
++    &quot;RunOnceActivity.MCP Project settings loaded&quot;: &quot;true&quot;,
++    &quot;RunOnceActivity.ShowReadmeOnStart&quot;: &quot;true&quot;,
++    &quot;RunOnceActivity.TerminalTabsStorage.copyFrom.TerminalArrangementManager.252&quot;: &quot;true&quot;,
++    &quot;RunOnceActivity.git.unshallow&quot;: &quot;true&quot;,
++    &quot;RunOnceActivity.typescript.service.memoryLimit.init&quot;: &quot;true&quot;,
++    &quot;SHARE_PROJECT_CONFIGURATION_FILES&quot;: &quot;true&quot;,
++    &quot;ai.playground.ignore.import.keys.banner.in.settings&quot;: &quot;true&quot;,
++    &quot;com.intellij.ml.llm.matterhorn.ej.ui.settings.DefaultModelSelectionForGA.v1&quot;: &quot;true&quot;,
++    &quot;git-widget-placeholder&quot;: &quot;feature/async-pipeline&quot;,
++    &quot;junie.onboarding.icon.badge.shown&quot;: &quot;true&quot;,
++    &quot;last_opened_file_path&quot;: &quot;C:/Users/Dennis/Desktop/python/BOP3000&quot;,
++    &quot;node.js.detected.package.eslint&quot;: &quot;true&quot;,
++    &quot;node.js.selected.package.eslint&quot;: &quot;(autodetect)&quot;,
++    &quot;node.js.selected.package.tslint&quot;: &quot;(autodetect)&quot;,
++    &quot;nodejs_package_manager_path&quot;: &quot;npm&quot;,
++    &quot;settings.editor.selected.configurable&quot;: &quot;com.jetbrains.python.configuration.PyActiveSdkModuleConfigurable&quot;,
++    &quot;to.speed.mode.migration.done&quot;: &quot;true&quot;,
++    &quot;vue.rearranger.settings.migration&quot;: &quot;true&quot;
+   }
+-}]]></component>
++}</component>
+   <component name="RecentsManager">
+     <key name="CopyFile.RECENT_KEYS">
+       <recent name="C:\Users\Dennis\Desktop\python\BOP3000" />
+@@ -140,6 +147,31 @@
+       <EXTENSION ID="PythonCoverageRunConfigurationExtension" runner="coverage.py" />
+       <option name="RUN_TOOL" value="" />
+       <option name="SCRIPT_NAME" value="" />
++      <option name="PARAMETERS" value="" />
++      <option name="SHOW_COMMAND_LINE" value="false" />
++      <option name="EMULATE_TERMINAL" value="false" />
++      <option name="MODULE_MODE" value="false" />
++      <option name="REDIRECT_INPUT" value="false" />
++      <option name="INPUT_FILE" value="" />
++      <method v="2" />
++    </configuration>
++    <configuration name="main" type="PythonConfigurationType" factoryName="Python" nameIsGenerated="true">
++      <module name="SpeedSkate" />
++      <option name="ENV_FILES" value="" />
++      <option name="INTERPRETER_OPTIONS" value="" />
++      <option name="PARENT_ENVS" value="true" />
++      <envs>
++        <env name="PYTHONUNBUFFERED" value="1" />
++      </envs>
++      <option name="SDK_HOME" value="" />
++      <option name="SDK_NAME" value="Python 3.12 (BOP3000) (2)" />
++      <option name="WORKING_DIRECTORY" value="$PROJECT_DIR$" />
++      <option name="IS_MODULE_SDK" value="false" />
++      <option name="ADD_CONTENT_ROOTS" value="true" />
++      <option name="ADD_SOURCE_ROOTS" value="true" />
++      <EXTENSION ID="PythonCoverageRunConfigurationExtension" runner="coverage.py" />
++      <option name="RUN_TOOL" value="" />
++      <option name="SCRIPT_NAME" value="$PROJECT_DIR$/main.py" />
+       <option name="PARAMETERS" value="" />
+       <option name="SHOW_COMMAND_LINE" value="false" />
+       <option name="EMULATE_TERMINAL" value="false" />
+@@ -190,8 +222,7 @@
+   <component name="SharedIndexes">
+     <attachedChunks>
+       <set>
+-        <option value="bundled-js-predefined-d6986cc7102b-9b0f141eb926-JavaScript-PY-253.31033.139" />
+-        <option value="bundled-python-sdk-2653e85de345-6d6dccd035ac-com.jetbrains.pycharm.pro.sharedIndexes.bundled-PY-253.31033.139" />
++        <option value="bundled-python-sdk-ca5e2b39c7df-6e1f45a539f7-com.jetbrains.pycharm.pro.sharedIndexes.bundled-PY-253.29346.308" />
+       </set>
+     </attachedChunks>
+   </component>
+Index: pipeline/tracking_pipeline.py
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/pipeline/tracking_pipeline.py b/pipeline/tracking_pipeline.py
+new file mode 100644
+--- /dev/null	(date 1772203413411)
++++ b/pipeline/tracking_pipeline.py	(date 1772203413411)
+@@ -0,0 +1,389 @@
++# pipeline/tracking_pipeline.py
++#
++# ANSVAR: Multi-object tracking, rundtelling, fall-deteksjon og Re-ID.
++#
++# Dette er den mest komplekse tråden – her skjer all "sport-logikk":
++#   - Oppdatere tracker med nye deteksjoner
++#   - Telle runder når utøver krysser virtuell mållinje
++#   - Detektere fall basert på hastighet + bounding box
++#   - Re-identifisere utøvere som tracker mistet
++#
++# INPUT:  det_q   – DetectionItem (frame + bounding boxes)
++# OUTPUT: event_q – TrackingEvent (runde fullført, fall, Re-ID osv.)
++#
++# VIKTIG: event_q er en vanlig queue.Queue() – events må ALDRI droppes!
++#
++
++import queue
++import logging
++import threading
++import time
++from dataclasses import dataclass, field
++from typing import Dict, List, Optional, Tuple
++from enum import Enum
++
++logger = logging.getLogger(__name__)
++
++
++# ---------------------------------------------------------------------------
++# Event-typer (jf. PRD 5.2.5 Event-Driven Architecture)
++class EventType(Enum):
++    LAP_COMPLETED   = "lap_completed"    # utøver fullførte en runde
++    FALL_DETECTED   = "fall_detected"    # fall detektert
++    RACE_STARTED    = "race_started"     # løpet startet
++    RACE_FINISHED   = "race_finished"    # løpet ferdig
++    SKATER_LAPPED   = "skater_lapped"    # utøver tatt igjen med en runde
++    REID_OCCURRED   = "reid_occurred"    # tracker re-identifiserte en utøver
++
++
++@dataclass
++class TrackingEvent:
++    """
++    Event som sendes til output_pipeline og videre til scoreboard/API.
++
++    event_type:   hva som skjedde (se EventType)
++    skater_id:    hvilken utøver det gjelder (helmet-nummer eller track-ID)
++    ts:           tidspunkt (perf_counter)
++    lap_number:   hvilken runde (hvis relevant)
++    lap_time_ms:  rundetid i millisekunder (hvis relevant)
++    confidence:   hvor sikker systemet er (lav = marker for manuell sjekk)
++    metadata:     ekstra data (posisjon, hastighet osv.)
++    """
++    event_type: EventType
++    skater_id: int
++    ts: float
++    lap_number: int = 0
++    lap_time_ms: float = 0.0
++    confidence: float = 1.0
++    metadata: dict = field(default_factory=dict)
++
++
++# ---------------------------------------------------------------------------
++# SkaterState – holder styr på én utøver
++#
++@dataclass
++class SkaterState:
++    """
++    Alt vi vet om én utøver gjennom løpet.
++
++    track_id:       intern ID fra tracker (byttes ved Re-ID)
++    helmet_number:  kjent helmet-nummer (None hvis ikke lest ennå)
++    lap_count:      antall fullførte runder
++    last_lap_ts:    tidspunkt for siste rundpassering
++    positions:      siste N posisjoner [(x, y, ts), ...]
++    velocities:     estimert hastighet per frame
++    bbox_history:   siste N bounding boxes for fall-deteksjon
++    is_lost:        True hvis tracker mistet denne utøveren
++    frames_lost:    antall frames siden sist sett
++    """
++    track_id: int
++    helmet_number: Optional[int] = None
++    lap_count: int = 0
++    last_lap_ts: float = 0.0
++    positions: List[Tuple] = field(default_factory=list)
++    velocities: List[float] = field(default_factory=list)
++    bbox_history: List[List] = field(default_factory=list)
++    is_lost: bool = False
++    frames_lost: int = 0
++
++    MAX_HISTORY = 30  # antall frames vi husker bakover
++
++    def update_position(self, cx: float, cy: float, ts: float):
++        """Legg til ny posisjon og beregn hastighet."""
++        self.positions.append((cx, cy, ts))
++        if len(self.positions) > self.MAX_HISTORY:
++            self.positions.pop(0)
++
++        # Beregn hastighet (piksler/sekund) hvis vi har minst 2 punkter
++        if len(self.positions) >= 2:
++            prev = self.positions[-2]
++            dx = cx - prev[0]
++            dy = cy - prev[1]
++            dt = ts - prev[2]
++            if dt > 0:
++                speed = ((dx**2 + dy**2) ** 0.5) / dt
++                self.velocities.append(speed)
++                if len(self.velocities) > self.MAX_HISTORY:
++                    self.velocities.pop(0)
++
++    def update_bbox(self, bbox: List[float]):
++        """Lagre bounding box for fall-deteksjon."""
++        self.bbox_history.append(bbox)
++        if len(self.bbox_history) > self.MAX_HISTORY:
++            self.bbox_history.pop(0)
++
++    @property
++    def current_speed(self) -> float:
++        """Siste estimerte hastighet."""
++        return self.velocities[-1] if self.velocities else 0.0
++
++    @property
++    def avg_speed(self) -> float:
++        """Gjennomsnittshastighet siste N frames."""
++        return sum(self.velocities) / len(self.velocities) if self.velocities else 0.0
++
++    @property
++    def current_bbox_aspect(self) -> float:
++        """Aspect ratio (bredde/høyde) for siste bounding box."""
++        if not self.bbox_history:
++            return 1.0
++        b = self.bbox_history[-1]
++        w = b[2] - b[0]
++        h = b[3] - b[1]
++        return w / h if h > 0 else 1.0
++
++
++# ---------------------------------------------------------------------------
++# Hjelpefunksjoner
++def centroid(bbox: List[float]) -> Tuple[float, float]:
++    """Beregn senter-punkt (cx, cy) fra bounding box [x1,y1,x2,y2]."""
++    return ((bbox[0] + bbox[2]) / 2, (bbox[1] + bbox[3]) / 2)
++
++
++def crossed_finish_line(prev_pos, curr_pos, finish_line_x: float,
++                        detection_zone: float = 75.0) -> bool:
++    """
++    Sjekk om utøver krysset den virtuelle mållinjen (jf. PRD 14.5.1).
++
++    Vi bruker en deteksjonssone (±detection_zone piksler) rundt linjen
++    for å ta høyde for tracking-støy.
++
++    finish_line_x:  x-koordinat for mållinjen (konfigureres per bane)
++    detection_zone: halvbredden av deteksjonssonen i piksler
++    """
++    if prev_pos is None or curr_pos is None:
++        return False
++
++    prev_x = prev_pos[0]
++    curr_x = curr_pos[0]
++
++    # bekrefter riktig retning (jf. PRD 5.3.2)
++    moving_right = curr_x > prev_x     # TODO: tilpass per bane-orientering
++
++    # sjekker at vi faktisk krysset linjen
++    crossed = prev_x < finish_line_x <= curr_x
++
++    return crossed and moving_right
++
++
++def detect_fall(skater: SkaterState, config) -> Tuple[bool, float]:
++    """
++    Fall-deteksjon basert på tre indikatorer (jf. PRD 6.1):
++    1. Plutselig hastighetsreduksjon (>70% på 0.5 sek)
++    2. Endring i bounding box aspect ratio (>40%)
++    3. Utøver i ro i >1 sekund
++
++    Returnerer (fall_detektert, konfidens).
++    """
++    if len(skater.velocities) < 10 or len(skater.bbox_history) < 5:
++        return False, 0.0   # ikke nok data
++
++    # --- indikator 1: Hastighetsreduksjon ---
++    recent_speed = skater.velocities[-1]
++    peak_speed = max(skater.velocities[-15:]) if len(skater.velocities) >= 15 else skater.avg_speed
++    speed_drop = (peak_speed - recent_speed) / peak_speed if peak_speed > 0 else 0
++    speed_fallen = speed_drop > 0.70
++
++    # --- indikator 2: Aspect ratio endring ---
++    if len(skater.bbox_history) >= 10:
++        prev_aspect = _aspect_ratio(skater.bbox_history[-10])
++        curr_aspect = skater.current_bbox_aspect
++        aspect_change = abs(curr_aspect - prev_aspect) / prev_aspect if prev_aspect > 0 else 0
++        aspect_fallen = aspect_change > 0.40
++    else:
++        aspect_fallen = False
++
++    # --- indikator 3: Stillstand >1 sekund ---
++    if len(skater.positions) >= 20:
++        recent_positions = skater.positions[-20:]
++        x_range = max(p[0] for p in recent_positions) - min(p[0] for p in recent_positions)
++        y_range = max(p[1] for p in recent_positions) - min(p[1] for p in recent_positions)
++        standing_still = x_range < 15 and y_range < 15
++    else:
++        standing_still = False
++
++    # kombiner indikatorer – krev minst 2 av 3 for å unngå false positives (PRD 6.2)
++    indicators = [speed_fallen, aspect_fallen, standing_still]
++    confirmed = sum(indicators) >= 2
++    confidence = sum(indicators) / 3.0
++
++    return confirmed, confidence
++
++
++def _aspect_ratio(bbox: List[float]) -> float:
++    w = bbox[2] - bbox[0]
++    h = bbox[3] - bbox[1]
++    return w / h if h > 0 else 1.0
++
++
++def attempt_reid(lost_skater: SkaterState, new_detection, known_skaters: Dict) -> bool:
++    """
++    Forsøk Re-ID når tracker mister en utøver (jf. PRD 10.1 Occlusion).
++
++    Prioritert rekkefølge:
++    1. Helmet-nummer match (sterkest – hard constraint)
++    2. Kalman-predikert posisjon vs. ny deteksjon
++    3. Appearance embedding (TODO: implementer med ReID-modell)
++
++    Returnerer True hvis re-identifisert.
++    """
++    # 1. Helmet-nummer match
++    if (lost_skater.helmet_number is not None and
++            new_detection.helmet_number == lost_skater.helmet_number):
++        logger.info(f"Re-ID via helmet-nummer: {lost_skater.helmet_number}")
++        return True
++
++    # 2. Posisjon-basert match (placeholder – Kalman-prediksjon implementeres her)
++    # TODO: sammenlign Kalman-predikert posisjon med ny deteksjon
++
++    # 3. Appearance embedding (placeholder)
++    # TODO: sammenlign feature-vektorer
++
++    return False
++
++
++# ---------------------------------------------------------------------------
++# tracking_loop – selve tråd-funksjonen
++def tracking_loop(in_q, event_q: queue.Queue, stop_event: threading.Event, config):
++    """
++    Tråd 4: Tracking & Logic
++
++    henter detectionItem fra det_q, oppdaterer tracker,
++    teller runder, detekterer fall, håndterer Re-ID.
++
++    Sender TrackingEvent til event_q for hver hendelse.
++    """
++    # Aktive utøvere: track_id → SkaterState
++    active_skaters: Dict[int, SkaterState] = {}
++    # Tapte utøvere (Re-ID buffer): track_id → SkaterState
++    lost_skaters: Dict[int, SkaterState] = {}
++
++    finish_line_x = getattr(config, 'finish_line_x', 640.0)    # konfigurer per bane
++    max_lost_frames = getattr(config, 'max_lost_frames', 150)   # ~5 sek på 30 FPS
++    fall_cooldown_frames = getattr(config, 'fall_cooldown', 90) # 3 sek cooldown
++
++    race_started = False
++    fall_cooldown: Dict[int, int] = {}  # track_id → frames til cooldown utløper
++
++    logger.info("Tracking-tråd klar.")
++
++    while not stop_event.is_set():
++        try:
++            item = in_q.get(timeout=0.2)
++        except queue.Empty:
++            continue
++
++        # --- Oppdater tracker med nye deteksjoner ---
++        # TODO: Erstatt dette med ByteTrack / DeepSORT kall
++        # tracker.update(item.detections) → returnerer liste av (track_id, bbox, helmet_num)
++        tracked_objects = _placeholder_tracker(item.detections)
++
++        current_track_ids = set()
++
++        for track_id, bbox, helmet_number in tracked_objects:
++            current_track_ids.add(track_id)
++            cx, cy = centroid(bbox)
++
++            # Ny utøver – opprett state
++            if track_id not in active_skaters:
++                # Sjekk om dette er en re-identifisert utøver
++                reid_match = None
++                for lost_id, lost_skater in lost_skaters.items():
++                    det_mock = type('D', (), {'helmet_number': helmet_number})()
++                    if attempt_reid(lost_skater, det_mock, active_skaters):
++                        reid_match = lost_skater
++                        del lost_skaters[lost_id]
++                        logger.info(f"Re-ID: track {lost_id} → {track_id}")
++                        event_q.put(TrackingEvent(
++                            event_type=EventType.REID_OCCURRED,
++                            skater_id=helmet_number or track_id,
++                            ts=item.ts,
++                            confidence=0.8,
++                            metadata={"old_track": lost_id, "new_track": track_id}
++                        ))
++                        break
++
++                if reid_match:
++                    reid_match.track_id = track_id
++                    active_skaters[track_id] = reid_match
++                else:
++                    active_skaters[track_id] = SkaterState(
++                        track_id=track_id,
++                        helmet_number=helmet_number
++                    )
++
++            skater = active_skaters[track_id]
++            if helmet_number is not None:
++                skater.helmet_number = helmet_number
++
++            # Hent forrige posisjon
++            prev_pos = skater.positions[-1][:2] if skater.positions else None
++
++            # Oppdater state
++            skater.update_position(cx, cy, item.ts)
++            skater.update_bbox(bbox)
++            skater.is_lost = False
++            skater.frames_lost = 0
++
++            # --- Rundtelling (jf. PRD 5.3) ---
++            if race_started and prev_pos is not None:
++                cooldown_ok = (item.ts - skater.last_lap_ts) > 5.0  # min 5 sek mellom runder
++                if crossed_finish_line(prev_pos, (cx, cy), finish_line_x) and cooldown_ok:
++                    skater.lap_count += 1
++                    lap_time_ms = (item.ts - skater.last_lap_ts) * 1000
++                    skater.last_lap_ts = item.ts
++
++                    logger.info(f"Runde {skater.lap_count} for utøver {skater.helmet_number or track_id}")
++                    event_q.put(TrackingEvent(
++                        event_type=EventType.LAP_COMPLETED,
++                        skater_id=skater.helmet_number or track_id,
++                        ts=item.ts,
++                        lap_number=skater.lap_count,
++                        lap_time_ms=lap_time_ms,
++                        confidence=1.0
++                    ))
++
++            # --- Fall-deteksjon (jf. PRD 6) ---
++            if race_started:
++                cooldown_remaining = fall_cooldown.get(track_id, 0)
++                if cooldown_remaining <= 0:
++                    fall_detected, confidence = detect_fall(skater, config)
++                    if fall_detected:
++                        logger.warning(f"FALL detektert: utøver {skater.helmet_number or track_id} (konfidens={confidence:.2f})")
++                        event_q.put(TrackingEvent(
++                            event_type=EventType.FALL_DETECTED,
++                            skater_id=skater.helmet_number or track_id,
++                            ts=item.ts,
++                            confidence=confidence
++                        ))
++                        fall_cooldown[track_id] = fall_cooldown_frames
++                else:
++                    fall_cooldown[track_id] = cooldown_remaining - 1
++
++        # --- Håndter tapte utøvere (Re-ID buffer) ---
++        for track_id in list(active_skaters.keys()):
++            if track_id not in current_track_ids:
++                skater = active_skaters[track_id]
++                skater.is_lost = True
++                skater.frames_lost += 1
++
++                if skater.frames_lost > max_lost_frames:
++                    logger.info(f"Track {track_id} slettet etter {skater.frames_lost} frames tapt.")
++                    del active_skaters[track_id]
++                else:
++                    # Flytt til lost-buffer for mulig Re-ID
++                    lost_skaters[track_id] = skater
++                    del active_skaters[track_id]
++
++
++def _placeholder_tracker(detections) -> List[Tuple]:
++    """
++    Placeholder til ByteTrack / DeepSORT er integrert.
++    Returnerer liste av (track_id, bbox, helmet_number).
++
++    TODO : å erstatt med ekte tracker til slutt
++    """
++    result = []
++    for i, det in enumerate(detections):
++        result.append((i, det.bbox, det.helmet_number))
++    return result
+\ No newline at end of file
+Index: pipeline/inference_pipeline.py
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/pipeline/inference_pipeline.py b/pipeline/inference_pipeline.py
+new file mode 100644
+--- /dev/null	(date 1772202718528)
++++ b/pipeline/inference_pipeline.py	(date 1772202718528)
+@@ -0,0 +1,167 @@
++# pipeline/inference_pipeline.py
++#
++# ANSVAR: Kjøre YOLO-modellen på ferdig-preprosesserte frames (GPU).
++#
++# HVORFOR EGEN TRÅD?
++#   GPU-inference er den tyngste operasjonen i systemet.
++#   Ved å isolere den i en egen tråd unngår vi at den blokkerer
++#   capture, preprocessing eller tracking.
++#
++# INPUT:  proc_q  – FrameItem (ferdig preprosessert frame)
++# OUTPUT: det_q   – DetectionItem (frame + bounding boxes + helmet-numre)
++#
++
++import queue
++import logging
++import threading
++import time
++from dataclasses import dataclass, field
++from typing import Any, List, Optional
++
++logger = logging.getLogger(__name__)
++
++
++# ---------------------------------------------------------------------------
++# Datastruktur: DetectionItem
++# ---------------------------------------------------------------------------
++@dataclass
++class Detection:
++    """
++    Én enkelt deteksjon fra YOLO for én utøver.
++
++    bbox:           [x1, y1, x2, y2] i pikselkoordinater
++    confidence:     modellens sikkerhet (0.0 – 1.0)
++    helmet_number:  OCR-lest helmet-nummer (None hvis ikke lesbart)
++    class_id:       YOLO-klasse (f.eks. 0=skater, 1=fall)
++    """
++    bbox: List[float]
++    confidence: float
++    helmet_number: Optional[int] = None
++    class_id: int = 0
++
++
++@dataclass
++class DetectionItem:
++    """
++    "Pakken" som går fra inference → tracking.
++
++    Inneholder den originale frame-infoen + alle deteksjoner fra YOLO.
++    tracking_loop bruker dette til å oppdatere tracker og telle runder.
++    """
++    ts: float
++    frame: Any
++    frame_id: int
++    detections: List[Detection] = field(default_factory=list)
++    inference_ms: float = 0.0   # hvor lang tid inference tok – for profiling
++
++
++# ---------------------------------------------------------------------------
++# Hjelpefunksjoner (fylles ut når modell er klar)
++# ---------------------------------------------------------------------------
++def load_model(config):
++    """
++    Laster YOLO-modellen én gang ved oppstart.
++    Modellen lastes UTENFOR løkken – det ville vært katastrofalt
++    å laste den på nytt for hver frame.
++
++    config.model_path:   sti til .pt / .onnx / OpenVINO-modell
++    config.device:       "cuda", "cpu", eller "openvino"
++    config.conf_thresh:  confidence-terskel (f.eks. 0.5)
++
++    TODO: implementer når modell er klar
++    """
++    logger.info(f"Laster modell fra: {getattr(config, 'model_path', 'N/A')}")
++
++    # Eksempel med Ultralytics YOLO:
++    # from ultralytics import YOLO
++    # model = YOLO(config.model_path)
++    # model.to(config.device)
++    # return model
++
++    return None     # placeholder
++
++
++def run_inference(model, frame, config) -> List[Detection]:
++    """
++    Kjører YOLO på én frame og returnerer liste av Detection.
++
++    TODO: implementer når modell er klar.
++
++    Steg:
++    1. Kjør model(frame) → raw resultater
++    2. Parse bounding boxes, confidence, class
++    3. Kjør OCR på helmet-region for å lese nummer
++    4. Returner liste av Detection
++    """
++    if model is None:
++        return []   # placeholder
++
++    detections = []
++
++    # raw_results = model(frame, conf=config.conf_thresh)
++    # for r in raw_results[0].boxes:
++    #     bbox = r.xyxy[0].tolist()
++    #     conf = float(r.conf)
++    #     cls  = int(r.cls)
++    #     helmet_num = read_helmet_number(frame, bbox)  # OCR
++    #     detections.append(Detection(bbox, conf, helmet_num, cls))
++
++    return detections
++
++
++# ---------------------------------------------------------------------------
++# inference_loop – selve tråd-funksjonen
++
++def inference_loop(in_q, out_q, stop_event: threading.Event, config):
++    """
++    Tråd 3: GPU Inference
++
++    Henter ferdig-preprosesserte frames fra proc_q,
++    kjører YOLO, og sender DetectionItem videre til det_q.
++
++    INFERENCE_EVERY_N_FRAMES (jf. PRD 5.2.4):
++    Vi kjører ikke YOLO på absolutt alle frames – det ville
++    sløst GPU-ressurser. Mellom inference-frames bruker
++    tracking_loop Kalman-prediksjon for å holde sporingen jevn.
++    """
++    # Last modell én gang
++    model = load_model(config)
++    inference_every_n = 1  # frameskip AV: kjør inferens på hver frame # PRD 5.2.4
++    frame_count = 0
++
++    logger.info(f"Inference-tråd klar | inference_every_n={inference_every_n}")
++
++    while not stop_event.is_set():
++        try:
++            item = in_q.get(timeout=0.2)
++        except queue.Empty:
++            continue
++
++        frame_count += 1
++
++        # Hopp over frames mellom inference (Kalman tar over i tracking_loop)
++        if frame_count % inference_every_n != 0:
++            # Send videre uten deteksjoner – tracking bruker prediksjon
++            out_q.put_latest(DetectionItem(
++                ts=item.ts,
++                frame=item.frame,
++                frame_id=item.frame_id,
++                detections=[]       # tom = bruk Kalman-prediksjon
++            ))
++            continue
++
++        # Kjør YOLO her
++        t0 = time.perf_counter()
++        detections = run_inference(model, item.frame, config)
++        inference_ms = (time.perf_counter() - t0) * 1000
++
++        if inference_ms > 100:
++            logger.warning(f"Inference treg: {inference_ms:.1f}ms (frame {item.frame_id})")
++
++        out_q.put_latest(DetectionItem(
++            ts=item.ts,
++            frame=item.frame,
++            frame_id=item.frame_id,
++            detections=detections,
++            inference_ms=inference_ms
++        ))
+\ No newline at end of file
+Index: .idea/misc.xml
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+><?xml version=\"1.0\" encoding=\"UTF-8\"?>\r\n<project version=\"4\">\r\n  <component name=\"Black\">\r\n    <option name=\"sdkName\" value=\"Python 3.14 (SpeedSkate)\" />\r\n  </component>\r\n  <component name=\"ProjectRootManager\" version=\"2\" project-jdk-name=\"Python 3.12 (BOP3000)\" project-jdk-type=\"Python SDK\" />\r\n</project>
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/.idea/misc.xml b/.idea/misc.xml
+--- a/.idea/misc.xml	(revision d2d63706dc31af88035cab8a481a76e8c9851079)
++++ b/.idea/misc.xml	(date 1772173156267)
+@@ -3,5 +3,5 @@
+   <component name="Black">
+     <option name="sdkName" value="Python 3.14 (SpeedSkate)" />
+   </component>
+-  <component name="ProjectRootManager" version="2" project-jdk-name="Python 3.12 (BOP3000)" project-jdk-type="Python SDK" />
++  <component name="ProjectRootManager" version="2" project-jdk-name="Python 3.12 (BOP3000) (3)" project-jdk-type="Python SDK" />
+ </project>
+\ No newline at end of file
+Index: pipeline/output_pipeline.py
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/pipeline/output_pipeline.py b/pipeline/output_pipeline.py
+new file mode 100644
+--- /dev/null	(date 1772202873357)
++++ b/pipeline/output_pipeline.py	(date 1772202873357)
+@@ -0,0 +1,182 @@
++# pipeline/output_pipeline.py
++#
++# ANSVAR: Ta imot TrackingEvents og sende dem ut til scoreboard / API / fil.
++#
++# HVORFOR EGEN TRÅD?
++#   Output (JSON, API-kall, fil-skriving) kan blokkere.
++#   Ved å isolere det i en egen tråd påvirker ikke treg nettverksforbindelse
++#   eller disk-I/O tracking-ytelsen.
++#
++# INPUT:  event_q – TrackingEvent (fra tracking_pipeline)
++# OUTPUT: JSON til fil / HTTP API / scoreboard
++#
++# VIKTIG: event_q er vanlig queue.Queue() – events droppes ALDRI.
++#
++
++import json
++import queue
++import logging
++import threading
++import time
++from typing import Dict, List
++
++from pipeline.tracking_pipeline import TrackingEvent, EventType
++
++logger = logging.getLogger(__name__)
++
++
++# ---------------------------------------------------------------------------
++# RaceState – holder komplett løp-status for JSON-output
++# ---------------------------------------------------------------------------
++class RaceState:
++    """
++    Holder oversikt over hele løpet.
++    Oppdateres for hver event og serialiseres til JSON.
++
++    Dette er det scoreboard/API mottar.
++    """
++
++    def __init__(self):
++        self.skaters: Dict[int, dict] = {}   # skater_id → status
++        self.race_started = False
++        self.race_start_ts: float = 0.0
++        self.events_log: List[dict] = []
++
++    def apply_event(self, event: TrackingEvent):
++        """Oppdater state basert på event."""
++        skater_id = event.skater_id
++
++        # Opprett utøver hvis ny
++        if skater_id not in self.skaters:
++            self.skaters[skater_id] = {
++                "id": skater_id,
++                "laps": 0,
++                "lap_times_ms": [],
++                "last_lap_time_ms": 0.0,
++                "best_lap_time_ms": None,
++                "status": "racing",     # racing / fell / finished
++                "fell": False,
++            }
++
++        skater = self.skaters[skater_id]
++
++        if event.event_type == EventType.LAP_COMPLETED:
++            skater["laps"] = event.lap_number
++            skater["last_lap_time_ms"] = event.lap_time_ms
++            skater["lap_times_ms"].append(event.lap_time_ms)
++            if skater["best_lap_time_ms"] is None or event.lap_time_ms < skater["best_lap_time_ms"]:
++                skater["best_lap_time_ms"] = event.lap_time_ms
++
++        elif event.event_type == EventType.FALL_DETECTED:
++            skater["fell"] = True
++            skater["status"] = "fell"
++
++        elif event.event_type == EventType.RACE_STARTED:
++            self.race_started = True
++            self.race_start_ts = event.ts
++
++        # Logg event
++        self.events_log.append({
++            "type": event.event_type.value,
++            "skater_id": skater_id,
++            "ts": event.ts,
++            "lap": event.lap_number,
++            "confidence": event.confidence,
++        })
++
++    def to_json(self) -> str:
++        """
++        Serialiser til JSON (jf. PRD 2.1 Score board Integration).
++
++        Format som scoreboard forventer:
++        {
++          "timestamp": 1234567890.123,
++          "race_time_s": 45.2,
++          "skaters": {
++            7: { "id": 7, "laps": 3, "last_lap_time_ms": 12340, ... },
++            ...
++          }
++        }
++        """
++        return json.dumps({
++            "timestamp": time.time(),
++            "race_time_s": (time.perf_counter() - self.race_start_ts) if self.race_started else 0,
++            "skaters": self.skaters,
++        }, indent=2)
++
++
++# ---------------------------------------------------------------------------
++# Output-funksjoner (pluggbare – legg til API-kall her)
++# ---------------------------------------------------------------------------
++def write_to_file(state: RaceState, path: str = "race_state.json"):
++    """
++    Skriv state til JSON-fil.
++    Enkel og pålitelig – bra som primær output under utvikling.
++    """
++    try:
++        with open(path, "w") as f:
++            f.write(state.to_json())
++    except OSError as e:
++        logger.error(f"Kunne ikke skrive til {path}: {e}")
++
++
++def send_to_api(state: RaceState, config):
++    """
++    Send state til eksternt API / scoreboard.
++
++    TODO: implementer HTTP POST når scoreboard-API er klart.
++
++    import requests
++    try:
++        r = requests.post(config.api_url, json=json.loads(state.to_json()), timeout=1.0)
++        if r.status_code != 200:
++            logger.warning(f"API svarte {r.status_code}")
++    except requests.RequestException as e:
++        logger.error(f"API-feil: {e}")
++    """
++    pass    # placeholder
++
++
++# ---------------------------------------------------------------------------
++# output_loop – selve tråd-funksjonen
++
++def output_loop(event_q: queue.Queue, stop_event: threading.Event, config=None):
++    """
++    Tråd 5: Data Output
++
++    Lytter på event_q og oppdaterer RaceState for hvert event.
++    Skriver ut JSON til fil og/eller API etter hvert event.
++
++    Fordi event_q er vanlig queue.Queue() (ikke LatestQueue),
++    er vi garantert å prosessere ALLE events – ingen droppes.
++    """
++    state = RaceState()
++    output_path = getattr(config, 'output_json_path', 'race_state.json') if config else 'race_state.json'
++    last_write_ts = 0.0
++    write_interval = 0.5   # skriv til fil maks hvert 0.5 sekund
++
++    logger.info("Output-tråd klar.")
++
++    while not stop_event.is_set():
++        try:
++            event: TrackingEvent = event_q.get(timeout=0.2)
++        except queue.Empty:
++            continue
++
++        # oppdater state
++        state.apply_event(event)
++        logger.debug(f"Event: {event.event_type.value} | utøver {event.skater_id}")
++
++        # Skriv til fil (ikke for ofte (unngå unødvendig disk-I/O))
++        now = time.perf_counter()
++        if now - last_write_ts > write_interval:
++            write_to_file(state, output_path)
++            last_write_ts = now
++
++        # Send til API
++        if config and getattr(config, 'api_url', None):
++            send_to_api(state, config)
++
++    #siste skriving ved avslutning
++    write_to_file(state, output_path)
++    logger.info(f"Output-tråd ferdig. Siste state skrevet til {output_path}")
+\ No newline at end of file
+Index: .idea/Project.iml
+IDEA additional info:
+Subsystem: com.intellij.openapi.diff.impl.patch.BaseRevisionTextPatchEP
+<+><?xml version=\"1.0\" encoding=\"UTF-8\"?>\r\n<module type=\"PYTHON_MODULE\" version=\"4\">\r\n  <component name=\"NewModuleRootManager\">\r\n    <content url=\"file://$MODULE_DIR$\">\r\n      <excludeFolder url=\"file://$MODULE_DIR$/.venv\" />\r\n    </content>\r\n    <orderEntry type=\"jdk\" jdkName=\"Python 3.12 (BOP3000)\" jdkType=\"Python SDK\" />\r\n    <orderEntry type=\"sourceFolder\" forTests=\"false\" />\r\n  </component>\r\n</module>
+Subsystem: com.intellij.openapi.diff.impl.patch.CharsetEP
+<+>UTF-8
+===================================================================
+diff --git a/.idea/Project.iml b/.idea/Project.iml
+--- a/.idea/Project.iml	(revision d2d63706dc31af88035cab8a481a76e8c9851079)
++++ b/.idea/Project.iml	(date 1772173155405)
+@@ -4,7 +4,7 @@
+     <content url="file://$MODULE_DIR$">
+       <excludeFolder url="file://$MODULE_DIR$/.venv" />
+     </content>
+-    <orderEntry type="jdk" jdkName="Python 3.12 (BOP3000)" jdkType="Python SDK" />
++    <orderEntry type="jdk" jdkName="Python 3.12 (BOP3000) (3)" jdkType="Python SDK" />
+     <orderEntry type="sourceFolder" forTests="false" />
+   </component>
+ </module>
+\ No newline at end of file
