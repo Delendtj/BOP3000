@@ -14,3 +14,7 @@ Det er viktig at systemet analyserer data i nærmest sanntid. Helst innenfor 5-1
 Dataen kan leveres videre til systemer som viser tider på storskjerm. Dette er noe som kan lages om det blir tid/anledning.
 
 Oppgaven blir å finne kameraer som fungerer å bruke i ishaller, identifisere og trene modeller og sy dette sammen til et system som utfører oppgaven
+
+
+YOLO ROI = r
+OCR ROI = o

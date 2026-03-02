@@ -39,7 +39,7 @@ class Tracker:
         self.PERSON_CLASS_ID = 1
         self.HELMET_CLASS_ID = 0
         self.RUNS_BEFORE_RETRY = 2
-        self.RUNS_COOLDOWN = 10
+        self.RUNS_COOLDOWN = 5
 
         self.ocr_frames = ocr_frames
         self.conf_threshold = conf_threshold

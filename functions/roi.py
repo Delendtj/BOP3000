@@ -98,6 +98,22 @@ def bbox_center_in_roi(bbox, roi):
     return cv2.pointPolygonTest(polygon, (cx, cy), False) >= 0
 
 
+def point_in_roi(point, roi):
+    if point is None or roi is None or len(roi) < 3:
+        return False
+    px, py = point
+    polygon = np.array(roi, dtype=np.int32)
+    return cv2.pointPolygonTest(polygon, (float(px), float(py)), False) >= 0
+
+
+def roi_inside_roi(inner_roi, outer_roi):
+    if inner_roi is None or outer_roi is None:
+        return False
+    if len(inner_roi) < 3 or len(outer_roi) < 3:
+        return False
+    return all(point_in_roi((x, y), outer_roi) for x, y in inner_roi)
+
+
 def filter_dets_by_roi(det, roi):
     if det is None or roi is None:
         return det

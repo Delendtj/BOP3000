@@ -1,17 +1,18 @@
 import os
+import shutil
 
 from ultralytics import YOLO
-
+import tensorrt as trt
 
 def _build_engine_from_onnx(
     onnx_path,
     engine_path,
     use_fp16=True,
-    imgsz=640,
+    imgsz=1280,
     batch=1,
     workspace_gb=8,
 ):
-    import tensorrt as trt
+
 
     logger = trt.Logger(trt.Logger.WARNING)
     builder = trt.Builder(logger)
@@ -72,6 +73,55 @@ def _build_engine_from_onnx(
         f.write(bytes(serialized_engine))
 
 
+def _export_onnx_from_pt(pt_path, onnx_path, imgsz=640, use_fp16=True):
+    if not os.path.exists(pt_path):
+        raise FileNotFoundError(f"PyTorch model not found for ONNX export: {pt_path}")
+
+    onnx_dir = os.path.dirname(onnx_path)
+    if onnx_dir:
+        os.makedirs(onnx_dir, exist_ok=True)
+
+    print(f"  ONNX file not found. Exporting from PyTorch weights: {pt_path}")
+    model = YOLO(pt_path, task="detect")
+
+    export_kwargs = {
+        "format": "onnx",
+        "imgsz": int(imgsz),
+        "dynamic": False,
+        "simplify": False,
+    }
+
+    try:
+        exported_path = model.export(half=bool(use_fp16), **export_kwargs)
+    except Exception as e:
+        if use_fp16:
+            print(f"  FP16 ONNX export failed ({e}), retrying FP32 ONNX export...")
+            exported_path = model.export(half=False, **export_kwargs)
+        else:
+            raise
+
+    if os.path.exists(onnx_path):
+        print(f"  ONNX export ready: {onnx_path}")
+        return onnx_path
+
+    exported_path = str(exported_path) if exported_path is not None else ""
+    default_path = os.path.splitext(pt_path)[0] + ".onnx"
+    candidate_paths = [exported_path, default_path]
+
+    for candidate in candidate_paths:
+        if candidate and os.path.exists(candidate):
+            if os.path.abspath(candidate) != os.path.abspath(onnx_path):
+                shutil.move(candidate, onnx_path)
+            print(f"  ONNX export ready: {onnx_path}")
+            return onnx_path
+
+    raise RuntimeError(
+        "ONNX export finished but no output file was found.\n"
+        f"  expected: {onnx_path}\n"
+        f"  checked : {', '.join([p for p in candidate_paths if p])}"
+    )
+
+
 def init_tensorrt(config):
     pt_path = config.get("Model_PT_path", "models/best.pt")
     onnx_path = config.get("Model_ONNX_path", os.path.splitext(pt_path)[0] + ".onnx")
@@ -94,6 +144,14 @@ def init_tensorrt(config):
         except Exception as e:
             print(f"  Engine load failed ({e}), rebuilding...")
 
+    if not os.path.exists(onnx_path):
+        _export_onnx_from_pt(
+            pt_path=pt_path,
+            onnx_path=onnx_path,
+            imgsz=imgsz,
+            use_fp16=use_fp16,
+        )
+
     if os.path.exists(onnx_path):
         try:
             print(f"  Building TensorRT engine from ONNX (TensorRT Python API): {onnx_path}")
@@ -110,37 +168,11 @@ def init_tensorrt(config):
             print("  TensorRT engine built and loaded successfully")
             return model
         except Exception as e:
-            print(f"  ONNX TensorRT build failed ({e}), falling back to PyTorch export...")
-
-    if os.path.exists(pt_path):
-        try:
-            print(f"  Building TensorRT engine at imgsz={imgsz} from PyTorch: {pt_path}")
-            print("  This will take several minutes while TensorRT profiles your GPU...")
-            model = YOLO(pt_path, task="detect")
-            # Keep optimized export values from the current implementation.
-            exported_engine = model.export(
-                format="engine",
-                half=use_fp16,
-                simplify=True,
-                workspace=8,
-                batch=1,
-                dynamic=False,
-                imgsz=imgsz,
-            )
-
-            load_engine_path = engine_path
-            if exported_engine is not None and os.path.exists(str(exported_engine)):
-                load_engine_path = str(exported_engine)
-
-            model = YOLO(load_engine_path, task="detect")
-            print("  TensorRT engine built and loaded successfully")
-            return model
-        except Exception as e:
-            raise RuntimeError(f"TensorRT build failed from PyTorch fallback: {e}") from e
+            raise RuntimeError(f"ONNX TensorRT build failed: {e}") from e
 
     raise FileNotFoundError(
         "No model files found. Checked:\n"
+        f"  pt     : {pt_path}\n"
         f"  engine : {engine_path}\n"
         f"  onnx   : {onnx_path}\n"
-        f"  pt     : {pt_path}"
     )
