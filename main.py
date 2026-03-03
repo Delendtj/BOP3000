@@ -22,7 +22,7 @@ config = {
     'IMGSZ': 1280,
 }
 
-DATA_PATH = "../videos/DJI_CUT.MP4"
+DATA_PATH = "DJI_20260228140513_0010_D.MP4"
 CONF_THRESHOLD = 0.3
 FRAME_SKIP = 1
 OCR_FRAMES = 3          # collect votes for N frames before deciding
@@ -41,7 +41,6 @@ INFERENCE_CONFIG = {
 
 YOLO_ROI_PATH = os.path.join("img", "yolo_roi.json")
 OCR_ROI_PATH = os.path.join("img", "ocr_roi.json")
-LEGACY_ROI_PATH = os.path.join("img", "detection_roi.json")
 
 detector = HardwareDetector(config)
 model = detector.initialize_model()
@@ -77,12 +76,9 @@ if not ret:
 # ROI
 yolo_roi = load_roi(YOLO_ROI_PATH)
 if yolo_roi is None:
-    yolo_roi = load_roi(LEGACY_ROI_PATH)
-if yolo_roi is None:
     yolo_roi = select_roi(preview_frame, window_name="YOLO ROI Selector")
     if yolo_roi is not None:
         save_roi(YOLO_ROI_PATH, yolo_roi)
-        save_roi(LEGACY_ROI_PATH, yolo_roi)
 
 ocr_roi = load_roi(OCR_ROI_PATH)
 if ocr_roi is not None and yolo_roi is not None and not roi_inside_roi(ocr_roi, yolo_roi):
