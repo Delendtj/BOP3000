@@ -48,11 +48,10 @@ class LatestQueue(queue.Queue):
 
 
 # 3) Tråd 1: Capture (leser frames fra video/kamera)
-#
-def capture_loop(cap: cv2.VideoCapture,
-                 out_q: LatestQueue,
-                 stop_event: threading.Event,
-                 frame_skip: int = 1):
+def _capture_loop(cap: cv2.VideoCapture,
+                  out_q: LatestQueue,
+                  stop_event: threading.Event,
+                  frame_skip: int = 1):
     """
     leser frames fra OpenCV VideoCapture i en egen tråd.
     gjør at hovedtråden slipper å "vente" på disk/kamera.
@@ -76,10 +75,10 @@ def capture_loop(cap: cv2.VideoCapture,
 
 
 # 4) Tråd 2: Preprocessing (valgfritt steg egt kan sees på)
-def preprocess_loop(in_q: LatestQueue,
-                    out_q: LatestQueue,
-                    stop_event: threading.Event,
-                    resize=None):
+def _preprocess_loop(in_q: LatestQueue,
+                     out_q: LatestQueue,
+                     stop_event: threading.Event,
+                     roi_getter=None, resize=None, crop_padding=None):
     """
     Henter frames fra capture-kø og gjør lett preprocessing i egen tråd.
     Eksempel: resize / crop / fargekonvertering etc.
@@ -118,7 +117,6 @@ def preprocess_loop(in_q: LatestQueue,
         )
 
 # 5) Pipeline-klassen (det vi bruker i main.py)
-# 
 class AsyncFramePipeline:
     def __init__(
         self,
@@ -145,21 +143,23 @@ class AsyncFramePipeline:
 
         # Thread 1: capture
         self.t_cap = threading.Thread(
-            target=capture_loop,
+            target=_capture_loop,
             args=(self.cap, self.raw_q, self.stop_event, frame_skip),
             daemon=True,
         )
 
         # Thread 2: preprocessing
         self.t_pre = threading.Thread(
-            target=preprocess_loop,
+            target=_preprocess_loop,
             args=(
+                # In queue
                 self.raw_q,
+                # Out queue
                 self.proc_q,
                 self.stop_event,
+                self._get_inference_roi,
                 resize,
-                self.get_inference_roi,
-                crop_padding,
+                crop_padding
             ),
             daemon=True,
         )
@@ -199,7 +199,7 @@ class AsyncFramePipeline:
         with self._roi_lock:
             self._inference_roi = roi
 
-    def get_inference_roi(self):
+    def _get_inference_roi(self):
         with self._roi_lock:
             if self._inference_roi is None:
                 return None

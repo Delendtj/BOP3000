@@ -22,7 +22,7 @@ config = {
     'IMGSZ': 1280,
 }
 
-DATA_PATH = "DJI_20260228140513_0010_D.MP4"
+DATA_PATH = "../videos/DJI_CUT.MP4"
 CONF_THRESHOLD = 0.3
 FRAME_SKIP = 1
 OCR_FRAMES = 3          # collect votes for N frames before deciding
@@ -74,6 +74,7 @@ preview_cap.release()
 if not ret:
     raise RuntimeError("Could not read initial frame for ROI.")
 
+# ROI
 yolo_roi = load_roi(YOLO_ROI_PATH)
 if yolo_roi is None:
     yolo_roi = load_roi(LEGACY_ROI_PATH)
