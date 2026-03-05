@@ -145,7 +145,7 @@ class AsyncFramePipeline:
         self.t_cap = threading.Thread(
             target=_capture_loop,
             args=(self.cap, self.raw_q, self.stop_event, frame_skip),
-            daemon=True,
+            daemon=False,
         )
 
         # Thread 2: preprocessing
@@ -161,7 +161,7 @@ class AsyncFramePipeline:
                 resize,
                 crop_padding
             ),
-            daemon=True,
+            daemon=False,
         )
 
     def start(self):
@@ -189,11 +189,20 @@ class AsyncFramePipeline:
     def stop(self):
         """Stopper pipeline og frigjør VideoCapture."""
         self.stop_event.set()
-        self.cap.release()
-        if self.t_cap.is_alive():
-            self.t_cap.join(timeout=1.0)
+
+        # Join worker threads first so cap.release() doesn't race with cap.read().
         if self.t_pre.is_alive():
             self.t_pre.join(timeout=1.0)
+        if self.t_cap.is_alive():
+            self.t_cap.join(timeout=2.0)
+
+        self.cap.release()
+
+        # Final short joins in case release() unblocks a lingering read.
+        if self.t_cap.is_alive():
+            self.t_cap.join(timeout=0.5)
+        if self.t_pre.is_alive():
+            self.t_pre.join(timeout=0.5)
 
     def set_inference_roi(self, roi):
         with self._roi_lock:

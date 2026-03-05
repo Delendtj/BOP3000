@@ -4,9 +4,9 @@ import numpy as np
 import supervision as sv
 from trackers import ByteTrackTracker
 
-from functions.BBExtractor import extract_helmet_box
-from functions.register_helmet import register_helmet
-from functions.roi import bbox_center_in_roi
+# from functions.BBExtractor import extract_helmet_box
+# from functions.register_helmet import register_helmet
+# from functions.roi import bbox_center_in_roi
 
 
 class Tracker:
@@ -48,7 +48,7 @@ class Tracker:
     def set_roi(self, roi):
         self.roi = roi
 
-    def track_detection(self, detections: sv.Detections, frame):
+    def track_detection(self, detections: sv.Detections, helmets):
         people_detections = detections[detections.class_id == self.PERSON_CLASS_ID]
         helmet_detections = detections[detections.class_id == self.HELMET_CLASS_ID]
 
@@ -70,29 +70,29 @@ class Tracker:
             np.isin(self.helmet_tracks.tracker_id, list(self.helmet_numbers_final.keys()), invert=True)
         ]
 
-        self.check_for_ocr(non_confirmed_helmets, frame)
+        self.check_for_ocr(non_confirmed_helmets, helmets)
 
-    def check_for_ocr(self, non_confirmed_helmets: sv.Detections, frame):
-        if frame is None or self.roi is None or len(non_confirmed_helmets) == 0:
+    def check_for_ocr(self, non_confirmed_helmets: sv.Detections, helmets):
+        if helmets is None or self.roi is None or len(non_confirmed_helmets) == 0:
             return
-
-        det_full = np.column_stack(
-            [
-                non_confirmed_helmets.xyxy,
-                non_confirmed_helmets.confidence,
-                non_confirmed_helmets.class_id,
-                non_confirmed_helmets.tracker_id,
-            ]
-        )
-
-        helmets = extract_helmet_box(det_full, frame)
-        helmets = [h for h in helmets if bbox_center_in_roi(h["bbox"], self.roi)]
+        #
+        # det_full = np.column_stack(
+        #     [
+        #         non_confirmed_helmets.xyxy,
+        #         non_confirmed_helmets.confidence,
+        #         non_confirmed_helmets.class_id,
+        #         non_confirmed_helmets.tracker_id,
+        #     ]
+        # )
+        #
+        # helmets = extract_helmet_box(det_full, frame)
+        # helmets = [h for h in helmets if bbox_center_in_roi(h["bbox"], self.roi)]
         if len(helmets) == 0:
             return
 
-        helmet_results = register_helmet(helmets, debug=True)
+        #helmet_results = register_helmet(helmets, debug=True)
 
-        for h in helmet_results:
+        for h in helmets:
             tid = h["track_id"]
             number = h["helmet_number"]
 

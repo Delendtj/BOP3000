@@ -5,6 +5,7 @@ os.environ["PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK"] = "True"
 os.environ["PADDLE_PDX_ENABLE_MKLDNN_BYDEFAULT"] = "0"
 os.environ["FLAGS_use_mkldnn"] = "0"
 os.environ["FLAGS_enable_pir_in_executor"] = "0"
+os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
 
 from paddleocr import PaddleOCR
 
@@ -14,6 +15,7 @@ UPSCALE_THRESH = 60
 _ocr = PaddleOCR(
     text_detection_model_name="PP-OCRv5_mobile_det",
     text_recognition_model_name="PP-OCRv5_mobile_rec",
+    # use_gpu=False,
     use_doc_orientation_classify=False,
     use_doc_unwarping=False,
     use_textline_orientation=False,
@@ -120,9 +122,9 @@ def preprocess_image(image, debug=False):
     output = cv2.cvtColor(sharpened, cv2.COLOR_GRAY2BGR)
 
     # Vis fram for debugging
-    #if debug:
-    #    cv2.imshow("image", output)
-    #    cv2.waitKey(0)
-    #    cv2.destroyAllWindows()
+    if debug:
+        cv2.imshow("image", output)
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
 
     return output
