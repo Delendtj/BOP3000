@@ -18,6 +18,7 @@ from functions.roi import load_roi, roi_inside_roi, save_roi, select_roi
 from functions.tracker import Tracker
 from hardware_detector import HardwareDetector
 from pipeline.async_pipeline import AsyncFramePipeline
+from utilities.benchmark import OCRThroughputStats
 
 # Keep TensorRT TF32 behavior stable between engine build and execution contexts.
 os.environ.setdefault("NVIDIA_TF32_OVERRIDE", "0")
@@ -34,7 +35,6 @@ DATA_PATH = "../videos/DJI_CUT.MP4"
 CONF_THRESHOLD = 0.3
 FRAME_SKIP = 1
 OCR_FRAMES = 3          # collect votes for N frames before deciding
-OCR_STATS_LOG_EVERY_SEC = 2.0
 # INSERT ACTUAL FORMULA HERE
 NUMBER_OF_THREADS = 2
 
@@ -116,8 +116,10 @@ def main():
     ocr_worker.start()
     pipeline.start()
 
+    # Section for initializing benchmark classes here:
+    ocr_bench = OCRThroughputStats(log_every_sec=2.0)
+
     prev_frame_time = None
-    last_ocr_stats_log_time = time.perf_counter()
     fps_ema = 0.0
     frame_count = 0
 
@@ -193,15 +195,9 @@ def main():
                     fps_ema = fps_inst if fps_ema <= 0 else (0.9 * fps_ema + 0.1 * fps_inst)
             prev_frame_time = now
 
-            if now - last_ocr_stats_log_time >= OCR_STATS_LOG_EVERY_SEC:
+            if ocr_bench.should_log(now):
                 stats = ocr_worker.get_stats()
-                print(
-                    "OCR stats | "
-                    f"in_q: +{stats['in_enqueued']} / -{stats['in_dequeued']} / drop_old={stats['in_dropped_oldest']} | "
-                    f"out_q: +{stats['out_enqueued']} / -{stats['out_dequeued']} / drop_old={stats['out_dropped_oldest']} | "
-                    f"processed={stats['ocr_processed']} errors={stats['ocr_errors']}"
-                )
-                last_ocr_stats_log_time = now
+                print(ocr_bench.format_line(stats))
 
             fps_text = f"FPS: {fps_ema:.1f}" if fps_ema > 0 else "FPS: --"
             cv2.putText(
