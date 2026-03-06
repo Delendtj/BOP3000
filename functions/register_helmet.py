@@ -11,6 +11,7 @@ from paddleocr import PaddleOCR
 
 # Threshold, vi upscaler alt under dette
 UPSCALE_THRESH = 60
+_i = 0
 
 _ocr = PaddleOCR(
     text_detection_model_name="PP-OCRv5_mobile_det",
@@ -72,17 +73,16 @@ def register_helmet(helmets, debug=False):
                 valid_texts.append(digits)
                 valid_confs.append(float(score))
 
-
-
         if valid_texts:
             number_str = "".join(valid_texts).strip()
             ocr_conf = (sum(valid_confs) / len(valid_confs)) * 100.0
             # Show image if it valid
             if debug:
                 print("Number accepted was: ", number_str, " for track_id: ", tid)
-                cv2.imshow("Valid Image", processed_img)
-                cv2.waitKey(0)
-                cv2.destroyAllWindows()
+                if _saved_im_counter > 32: _saved_im_counter = 0
+                _saved_im_counter += 1
+                cv2.imwrite(f"output/helmet{_saved_im_counter}.png", processed_img)
+
 
         if debug:
             print(f"PaddleOCR raw text: {number_str!r}  conf: {ocr_conf:.1f}%")

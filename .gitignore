@@ -9,3 +9,4 @@ test_digit_crop.pt
 __pycache__/
 *.pyc
 *.pyo
+output/*
