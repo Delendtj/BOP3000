@@ -59,6 +59,7 @@ def _ocr_process_main(
         bbox = item.get("bbox", (0, 0, 0, 0))
         image = item.get("image")
 
+
         if image is None:
             result = {
                 "track_id": tid,
@@ -82,6 +83,8 @@ def _ocr_process_main(
 
         try:
             out = register_helmet([helmet], debug=False) # To Do: Make register helmet return a single helmet
+            if not out:
+                _inc(stats["ocr_empty_return"])
             result = out[0] if out else {
                 "track_id": tid,
                 "bbox": bbox,
@@ -131,6 +134,7 @@ class OCRWorker:
             "out_dropped_oldest": self._ctx.Value("i", 0),
             "ocr_processed": self._ctx.Value("i", 0),
             "ocr_errors": self._ctx.Value("i", 0),
+            "ocr_empty_return": self._ctx.Value("i", 0),
         }
 
     def start(self) -> None:

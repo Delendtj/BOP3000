@@ -18,5 +18,5 @@ class OCRThroughputStats:
             "OCR stats | "
             f"in_q: +{stats['in_enqueued']} / -{stats['in_dequeued']} / drop_old={stats['in_dropped_oldest']} | "
             f"out_q: +{stats['out_enqueued']} / -{stats['out_dequeued']} / drop_old={stats['out_dropped_oldest']} | "
-            f"processed={stats['ocr_processed']} errors={stats['ocr_errors']}"
+            f"processed={stats['ocr_processed']} errors={stats['ocr_errors']} empty={stats['ocr_empty_return']}"
         )

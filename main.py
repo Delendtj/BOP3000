@@ -32,11 +32,9 @@ config = {
 }
 
 DATA_PATH = "../videos/DJI_CUT.MP4"
-CONF_THRESHOLD = 0.3
+CONF_THRESHOLD = 0.5
 FRAME_SKIP = 1
 OCR_FRAMES = 3          # collect votes for N frames before deciding
-# INSERT ACTUAL FORMULA HERE
-NUMBER_OF_THREADS = 2
 
 INFERENCE_CONFIG = {
     'conf': CONF_THRESHOLD,
@@ -44,7 +42,7 @@ INFERENCE_CONFIG = {
     'max_det': 100,
     'imgsz': 1280,
     'half': False, # Switch til True hvis du bruker GPU
-    'device': None, # Same here
+    'device': 0, # Same here
     'verbose': False,
 }
 
@@ -122,9 +120,33 @@ def main():
     prev_frame_time = None
     fps_ema = 0.0
     frame_count = 0
+    paused = False
+    last_display_frame = None
+
+    print("Controls: Esc=quit, Space=pause/resume, r=redraw YOLO ROI, o=redraw OCR ROI")
 
     try:
         while True:
+            # Pause logic
+            if paused and last_display_frame is not None:
+                paused_frame = last_display_frame.copy()
+                cv2.putText(
+                    paused_frame,
+                    "PAUSED (Space to resume)",
+                    (10, 70),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.8,
+                    (0, 255, 255),
+                    2,
+                )
+                cv2.imshow('Yolo vision', paused_frame)
+                key = cv2.waitKey(30) & 0xFF
+                if key == 27:
+                    break
+                if key == ord(" "):
+                    paused = False
+                continue
+
             item = pipeline.read(timeout=0.5)
             if item is None:
                 if pipeline.stop_event.is_set():
@@ -153,19 +175,21 @@ def main():
                 detections = shift_detections_to_full_frame(detections, inference_offset)
                 detections = keep_detections_inside_roi(detections, yolo_roi)
 
+            # Run the Tracker
+            tracker.track_detection(detections)
+
             # Extract better crop from helmet detections and give to worker queue
             if ocr_roi is not None:
-                helmet_det = detections[detections.class_id == 0] # Filter for helmet dets
-                helmet_det = keep_detections_inside_roi(helmet_det, ocr_roi)
-                helmet_crops = extract_helmet_box(helmet_det, frame)
+                helmet_tracks = tracker.get_non_confirmed_helmet_tracks()
+                helmet_in_roi = keep_detections_inside_roi(helmet_tracks, ocr_roi)
+                # Submit crops into OCR worker
+                helmet_crops = extract_helmet_box(helmet_in_roi, frame)
                 for h in helmet_crops:
                     ocr_worker.submit(h)
 
-            # Get everything inside worker queue
+            # Evaluate if the detection is good enough to be set for tracks
             helmets_res = ocr_worker.drain_results()
-
-            # Run the Tracker
-            tracker.track_detection(detections, helmets_res)
+            tracker.check_for_ocr(helmets_res)
 
             # Annotate frames
             annotated = tracker.annotate(frame)
@@ -210,12 +234,16 @@ def main():
                 2,
             )
 
-            display_frame = cv2.resize(annotated, (1280, 720))
+            display_frame = cv2.resize(annotated, (1920, 1080))
+            last_display_frame = display_frame
             cv2.imshow('Yolo vision', display_frame)
 
             key = cv2.waitKey(1) & 0xFF
             if key == 27:
                 break
+            if key == ord(" "):
+                paused = True
+                continue
             if key == ord("r"):
                 new_yolo_roi = select_roi(frame, window_name="YOLO ROI Selector")
                 if new_yolo_roi is not None:

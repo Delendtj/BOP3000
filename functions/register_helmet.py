@@ -37,7 +37,8 @@ def register_helmet(helmets, debug=False):
         conf  = helmet['conf']
         tid = helmet['track_id']
 
-        if tid == -1: continue
+        if tid == -1:
+            continue
 
         processed_img = preprocess_image(img, debug=debug)
 

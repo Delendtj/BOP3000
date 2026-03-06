@@ -2,6 +2,7 @@ from collections import Counter, defaultdict
 
 import numpy as np
 import supervision as sv
+from numpy import dtype
 from trackers import ByteTrackTracker
 
 # from functions.BBExtractor import extract_helmet_box
@@ -48,7 +49,9 @@ class Tracker:
     def set_roi(self, roi):
         self.roi = roi
 
-    def track_detection(self, detections: sv.Detections, helmets):
+    def track_detection(self, detections: sv.Detections):
+
+
         people_detections = detections[detections.class_id == self.PERSON_CLASS_ID]
         helmet_detections = detections[detections.class_id == self.HELMET_CLASS_ID]
 
@@ -58,21 +61,31 @@ class Tracker:
         self.people_tracks = self.tracker_people.update(people_for_tracker)
         self.helmet_tracks = self.tracker_helmet.update(helmets_for_tracker)
 
+        # Fill data attribute with a "helmet_number" dict key to store helmet numbers
         if "helmet_number" not in self.helmet_tracks.data:
             self.helmet_tracks.data["helmet_number"] = np.full(len(self.helmet_tracks), -1, dtype=object)
 
+        # Actually add them into the tracks
         self.helmet_tracks.data["helmet_number"] = np.array(
             [self.helmet_numbers_final.get(tid, -1) for tid in self.helmet_tracks.tracker_id],
             dtype=object,
         )
 
+    def get_non_confirmed_helmet_tracks(self):
+        confirmed_ids = np.array(list(self.helmet_numbers_final.keys()), dtype=int)
+
+        if confirmed_ids.size == 0:
+            return self.helmet_tracks
+
+        keep = np.isin(self.helmet_tracks.tracker_id, confirmed_ids, invert=True)
+        return self.helmet_tracks[keep]
+
+    def check_for_ocr(self, helmets):
+
         non_confirmed_helmets = self.helmet_tracks[
             np.isin(self.helmet_tracks.tracker_id, list(self.helmet_numbers_final.keys()), invert=True)
         ]
 
-        self.check_for_ocr(non_confirmed_helmets, helmets)
-
-    def check_for_ocr(self, non_confirmed_helmets: sv.Detections, helmets):
         if helmets is None or self.roi is None or len(non_confirmed_helmets) == 0:
             return
 
@@ -81,13 +94,23 @@ class Tracker:
 
         #helmet_results = register_helmet(helmets, debug=True)
 
+        allowed_ids = set(non_confirmed_helmets.tracker_id.tolist())
+
         for h in helmets:
             tid = h["track_id"]
             number = h["helmet_number"]
 
-            # Skip pre-confirmation tracks from ByteTrack.
+            # Skip ids that are already confirmed
+            if tid not in allowed_ids:
+                print("Allowed: ",allowed_ids)
+                print("curren id: ",tid)
+
+                continue
+
+            # Skip tracks that isn't confirmed by ByteTrack yet.
             if tid == -1:
                 continue
+
 
             state = self.ocr_runs[tid]
 
@@ -116,6 +139,7 @@ class Tracker:
                     self.helmet_tracks.data["helmet_number"][idxs[0]] = final_number
 
                 self.processed_tracker_ids.add(tid)
+
 
     def annotate(self, frame):
         annotated = self.box_annotator.annotate(frame, self.people_tracks)
