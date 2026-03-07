@@ -13,7 +13,10 @@ def _inc(counter, delta: int = 1) -> None:
 
 
 def _drop_oldest_and_put(q: mp.Queue, item: Any) -> tuple[bool, bool]:
-    """Best-effort queue policy: drop one oldest item when full, then enqueue."""
+    """
+    Best-effort queue policy: drop one oldest item when full, then enqueue.
+    This is best for low latency
+    """
     try:
         q.put_nowait(item)
         return True, False
@@ -36,10 +39,10 @@ def _ocr_process_main(
     stats: Dict[str, Any],
 ) -> None:
     """
-    OCR worker process entrypoint.
+    OCR worker main loop.
 
     PaddleOCR is initialized in this process context by importing register_helmet
-    here (not in parent process), which avoids serialization/fork issues.
+    here (not in parent process), which avoids serialization/pickling issues.
     """
     from functions.register_helmet import register_helmet
 
@@ -52,6 +55,7 @@ def _ocr_process_main(
         if item == _STOP:
             break
 
+        # Increment stats for benchmarks logs
         _inc(stats["in_dequeued"])
         _inc(stats["ocr_processed"])
 
@@ -59,7 +63,7 @@ def _ocr_process_main(
         bbox = item.get("bbox", (0, 0, 0, 0))
         image = item.get("image")
 
-
+        # Default result
         if image is None:
             result = {
                 "track_id": tid,
@@ -67,6 +71,7 @@ def _ocr_process_main(
                 "helmet_number": "",
                 "ocr_conf": 0.0,
             }
+            # Bool returns for stat logs
             ok, dropped = _drop_oldest_and_put(out_queue, result)
             if ok:
                 _inc(stats["out_enqueued"])
@@ -82,9 +87,11 @@ def _ocr_process_main(
         }
 
         try:
-            out = register_helmet([helmet], debug=False) # To Do: Make register helmet return a single helmet
+            out = register_helmet([helmet], debug=False)
             if not out:
                 _inc(stats["ocr_empty_return"])
+
+            # Give empty default if the register_helmet returns nothing
             result = out[0] if out else {
                 "track_id": tid,
                 "bbox": bbox,
@@ -100,6 +107,7 @@ def _ocr_process_main(
                 "ocr_conf": 0.0,
             }
 
+        # Logging for stats
         ok, dropped = _drop_oldest_and_put(out_queue, result)
         if ok:
             _inc(stats["out_enqueued"])
@@ -108,21 +116,19 @@ def _ocr_process_main(
 
 
 class OCRWorker:
-    """Realtime-friendly OCR process wrapper with non-blocking queues."""
+    """OCR process wrapper with non-blocking queues."""
 
     def __init__(
         self,
         max_in_size: int = 256,
         max_out_size: int = 256,
         start_method: str = "spawn",
-        thresh: float = 0.3,
     ):
         self._ctx = mp.get_context(start_method)
         self.ocr_in_queue: mp.Queue = self._ctx.Queue(maxsize=max_in_size)
         self.ocr_out_queue: mp.Queue = self._ctx.Queue(maxsize=max_out_size)
         self._stop_event: mp.Event = self._ctx.Event()
         self._process: Optional[mp.Process] = None
-        self._thresh = thresh # Not used yet
 
         # Simply counters for stats
         self._stats: Dict[str, Any] = {
@@ -137,7 +143,12 @@ class OCRWorker:
             "ocr_empty_return": self._ctx.Value("i", 0),
         }
 
+
     def start(self) -> None:
+        """
+        Starts single process for handling OCR workload
+        It uses _ocrprocess_main as the target function as the main loop.
+        """
         if self._process is not None and self._process.is_alive():
             return
 
@@ -149,7 +160,11 @@ class OCRWorker:
         )
         self._process.start()
 
+
     def stop(self, timeout: float = 2.0) -> None:
+        """
+        Stops the current running process
+        """
         self._stop_event.set()
         _drop_oldest_and_put(self.ocr_in_queue, _STOP)
 
@@ -171,9 +186,6 @@ class OCRWorker:
             except Exception:
                 pass
 
-    def is_alive(self) -> bool:
-        return self._process is not None and self._process.is_alive()
-
     def submit(self, item: Dict[str, Any]) -> bool:
         """
         Non-blocking submit.
@@ -188,14 +200,11 @@ class OCRWorker:
             _inc(self._stats["in_dropped_oldest"])
         return accepted
 
-    # When should this be used. Can be removed?
-    def get_result_nowait(self) -> Optional[Dict[str, Any]]:
-        try:
-            return self.ocr_out_queue.get_nowait()
-        except Empty:
-            return None
-
-    def drain_results(self, max_items: int = 64) -> List[Dict[str, Any]]:
+    def drain_results(self, max_items: int = 24) -> List[Dict[str, Any]]:
+        """
+        Drains the queue in batches of max_items
+        Returns a List of Dicts of tracks
+        """
         items: List[Dict[str, Any]] = []
         for _ in range(max_items):
             try:
@@ -207,4 +216,8 @@ class OCRWorker:
         return items
 
     def get_stats(self) -> Dict[str, int]:
+        """
+        Return stats for the ocr_benchmark
+        It can be found in utilities/benchmark.py
+        """
         return {key: int(counter.value) for key, counter in self._stats.items()}

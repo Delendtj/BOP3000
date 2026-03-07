@@ -31,7 +31,7 @@ config = {
     'IMGSZ': 1280,
 }
 
-DATA_PATH = "../videos/canon_1.mp4"
+DATA_PATH = "../videos/DJI_CUT.MP4"
 CONF_THRESHOLD = 0.5
 FRAME_SKIP = 1
 OCR_VOTE = 3          # collect votes for N frames before deciding
