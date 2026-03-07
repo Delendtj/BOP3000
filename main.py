@@ -31,10 +31,10 @@ config = {
     'IMGSZ': 1280,
 }
 
-DATA_PATH = "../videos/DJI_CUT.MP4"
+DATA_PATH = "../videos/canon_1.mp4"
 CONF_THRESHOLD = 0.5
 FRAME_SKIP = 1
-OCR_FRAMES = 3          # collect votes for N frames before deciding
+OCR_VOTE = 3          # collect votes for N frames before deciding
 
 INFERENCE_CONFIG = {
     'conf': CONF_THRESHOLD,
@@ -42,7 +42,7 @@ INFERENCE_CONFIG = {
     'max_det': 100,
     'imgsz': 1280,
     'half': False, # Switch til True hvis du bruker GPU
-    'device': 0, # Same here
+    'device': None, # Same here
     'verbose': False,
 }
 
@@ -67,14 +67,11 @@ def main():
 
     # Screen resolution for window sizing
     root = tk.Tk()
-    system_width = root.winfo_screenwidth()
-    system_height = root.winfo_screenheight()
     root.destroy()
 
     # Open video
     preview_cap = cv2.VideoCapture(DATA_PATH)
     fps = preview_cap.get(cv2.CAP_PROP_FPS)
-    total_frames = int(preview_cap.get(cv2.CAP_PROP_FRAME_COUNT))
     ret, preview_frame = preview_cap.read()
     preview_cap.release()
     if not ret:
@@ -101,7 +98,7 @@ def main():
     cv2.namedWindow('Yolo vision', cv2.WINDOW_NORMAL)
 
     # THE TRACKER
-    tracker = Tracker(OCR_FRAMES, CONF_THRESHOLD, ocr_roi, frame_rate=fps)
+    tracker = Tracker(OCR_VOTE, CONF_THRESHOLD, ocr_roi, frame_rate=fps)
 
     # Initialize threads and processes
     pipeline = AsyncFramePipeline(
@@ -110,6 +107,7 @@ def main():
         queue_size=3,
         inference_roi=yolo_roi,
     )
+
     ocr_worker = OCRWorker()
     ocr_worker.start()
     pipeline.start()
@@ -127,7 +125,7 @@ def main():
 
     try:
         while True:
-            # Pause logic
+            # Pause logic (With Space Bar)
             if paused and last_display_frame is not None:
                 paused_frame = last_display_frame.copy()
                 cv2.putText(

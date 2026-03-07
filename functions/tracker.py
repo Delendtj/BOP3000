@@ -11,7 +11,7 @@ from trackers import ByteTrackTracker
 
 
 class Tracker:
-    def __init__(self, ocr_frames, conf_threshold, roi, frame_rate=30.0):
+    def __init__(self, ocr_votes_count, conf_threshold, roi, frame_rate=30.0):
         self.frame_rate = float(frame_rate) if float(frame_rate) > 0 else 30.0
 
         # Tuned ByteTrack settings for steadier helmet/person IDs.
@@ -39,10 +39,12 @@ class Tracker:
 
         self.PERSON_CLASS_ID = 1
         self.HELMET_CLASS_ID = 0
-        self.RUNS_BEFORE_RETRY = 2
+
+        # Runs we wait before we wait RUNS_COOLDOWN frames before we try again on a given TID
+        self.RUNS_BEFORE_RETRY = ocr_votes_count + 1
         self.RUNS_COOLDOWN = 5
 
-        self.ocr_frames = ocr_frames
+        self.ocr_votes_count = ocr_votes_count
         self.conf_threshold = conf_threshold
         self.roi = roi
 
@@ -102,9 +104,7 @@ class Tracker:
 
             # Skip ids that are already confirmed
             if tid not in allowed_ids:
-                print("Allowed: ",allowed_ids)
-                print("curren id: ",tid)
-
+                print("current id: ",tid, " not in allowed id list: ",allowed_ids)
                 continue
 
             # Skip tracks that isn't confirmed by ByteTrack yet.
@@ -119,7 +119,6 @@ class Tracker:
                 if state["cooldown"] >= self.RUNS_COOLDOWN:
                     state["runs"] = 0
                     state["cooldown"] = 0
-                    state["votes"].clear()
                 continue
 
             state["runs"] += 1
@@ -128,7 +127,8 @@ class Tracker:
                 state["votes"].append(number)
 
             print("tid:", tid, "votes:", state["votes"])
-            if len(state["votes"]) >= self.ocr_frames and tid not in self.helmet_numbers_final:
+            # Given enough votes and tid not being a confirmed helmet
+            if len(state["votes"]) >= self.ocr_votes_count and tid not in self.helmet_numbers_final:
                 final_number = Counter(state["votes"]).most_common(1)[0][0]
                 self.helmet_numbers_final[tid] = final_number
                 print(f"Tracker {tid} final helmet number: {final_number}")
