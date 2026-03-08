@@ -1,6 +1,11 @@
 import multiprocessing as mp
+import os
 from queue import Empty, Full
 from typing import Any, Dict, List, Optional
+
+import numpy as np
+
+from functions.shm_ring import SharedMemoryRing
 
 
 _STOP = "__STOP__"
@@ -37,6 +42,12 @@ def _ocr_process_main(
     out_queue: mp.Queue,
     stop_event: mp.Event,
     stats: Dict[str, Any],
+    shm_name: str,
+    shm_slots: int,
+    shm_max_h: int,
+    shm_max_w: int,
+    shm_channels: int,
+    shm_dtype: str,
 ) -> None:
     """
     OCR worker main loop.
@@ -45,74 +56,89 @@ def _ocr_process_main(
     here (not in parent process), which avoids serialization/pickling issues.
     """
     from functions.register_helmet import register_helmet
+    ring = SharedMemoryRing(
+        name=shm_name,
+        slots=shm_slots,
+        max_h=shm_max_h,
+        max_w=shm_max_w,
+        channels=shm_channels,
+        dtype=shm_dtype,
+        create=False,
+    )
 
-    while not stop_event.is_set():
-        try:
-            item = in_queue.get(timeout=0.1)
-        except Empty:
-            continue
+    try:
+        while not stop_event.is_set():
+            try:
+                item = in_queue.get(timeout=0.1)
+            except Empty:
+                continue
 
-        if item == _STOP:
-            break
+            if item == _STOP:
+                break
 
-        # Increment stats for benchmarks logs
-        _inc(stats["in_dequeued"])
-        _inc(stats["ocr_processed"])
+            # Increment stats for benchmarks logs
+            _inc(stats["in_dequeued"])
+            _inc(stats["ocr_processed"])
 
-        tid = int(item.get("track_id", -1))
-        bbox = item.get("bbox", (0, 0, 0, 0))
-        image = item.get("image")
+            tid = int(item.get("track_id", -1))
+            bbox = item.get("bbox", (0, 0, 0, 0))
+            if "shm_slot" in item:
+                image = ring.read(item["shm_slot"], item["shm_h"], item["shm_w"]).copy()
+            else:
+                image = item.get("image")
 
-        # Default result
-        if image is None:
-            result = {
-                "track_id": tid,
+            # Default result
+            if image is None:
+                result = {
+                    "track_id": tid,
+                    "bbox": bbox,
+                    "helmet_number": "",
+                    "ocr_conf": 0.0,
+                }
+                # Bool returns for stat logs
+                ok, dropped = _drop_oldest_and_put(out_queue, result)
+                if ok:
+                    _inc(stats["out_enqueued"])
+                if dropped:
+                    _inc(stats["out_dropped_oldest"])
+                continue
+
+            helmet = {
+                "image": image,
                 "bbox": bbox,
-                "helmet_number": "",
-                "ocr_conf": 0.0,
+                "conf": float(item.get("conf", 0.0)),
+                "track_id": tid,
             }
-            # Bool returns for stat logs
+
+            try:
+                out = register_helmet([helmet], debug=False)
+                if not out:
+                    _inc(stats["ocr_empty_return"])
+
+                # Give empty default if the register_helmet returns nothing
+                result = out[0] if out else {
+                    "track_id": tid,
+                    "bbox": bbox,
+                    "helmet_number": "",
+                    "ocr_conf": 0.0,
+                }
+            except Exception:
+                _inc(stats["ocr_errors"])
+                result = {
+                    "track_id": tid,
+                    "bbox": bbox,
+                    "helmet_number": "",
+                    "ocr_conf": 0.0,
+                }
+
+            # Logging for stats
             ok, dropped = _drop_oldest_and_put(out_queue, result)
             if ok:
                 _inc(stats["out_enqueued"])
             if dropped:
                 _inc(stats["out_dropped_oldest"])
-            continue
-
-        helmet = {
-            "image": image,
-            "bbox": bbox,
-            "conf": float(item.get("conf", 0.0)),
-            "track_id": tid,
-        }
-
-        try:
-            out = register_helmet([helmet], debug=False)
-            if not out:
-                _inc(stats["ocr_empty_return"])
-
-            # Give empty default if the register_helmet returns nothing
-            result = out[0] if out else {
-                "track_id": tid,
-                "bbox": bbox,
-                "helmet_number": "",
-                "ocr_conf": 0.0,
-            }
-        except Exception:
-            _inc(stats["ocr_errors"])
-            result = {
-                "track_id": tid,
-                "bbox": bbox,
-                "helmet_number": "",
-                "ocr_conf": 0.0,
-            }
-
-        # Logging for stats
-        ok, dropped = _drop_oldest_and_put(out_queue, result)
-        if ok:
-            _inc(stats["out_enqueued"])
-        if dropped:
-            _inc(stats["out_dropped_oldest"])
+    finally:
+        ring.close()
 
 
 class OCRWorker:
@@ -123,12 +149,24 @@ class OCRWorker:
         max_in_size: int = 256,
         max_out_size: int = 256,
         start_method: str = "spawn",
+        shm_slots: int = 1024,
+        shm_max_h: int = 256,
+        shm_max_w: int = 256,
+        shm_channels: int = 3,
+        shm_dtype: str = "uint8",
     ):
         self._ctx = mp.get_context(start_method)
         self.ocr_in_queue: mp.Queue = self._ctx.Queue(maxsize=max_in_size)
         self.ocr_out_queue: mp.Queue = self._ctx.Queue(maxsize=max_out_size)
         self._stop_event: mp.Event = self._ctx.Event()
         self._process: Optional[mp.Process] = None
+        self._ring: Optional[SharedMemoryRing] = None
+        self._shm_name = f"ocr_ring_{os.getpid()}"
+        self._shm_slots = int(shm_slots)
+        self._shm_max_h = int(shm_max_h)
+        self._shm_max_w = int(shm_max_w)
+        self._shm_channels = int(shm_channels)
+        self._shm_dtype = str(shm_dtype)
 
         # Simply counters for stats
         self._stats: Dict[str, Any] = {
@@ -141,6 +179,8 @@ class OCRWorker:
             "ocr_processed": self._ctx.Value("i", 0),
             "ocr_errors": self._ctx.Value("i", 0),
             "ocr_empty_return": self._ctx.Value("i", 0),
+            "shm_oversize_drop": self._ctx.Value("i", 0),
+            "shm_write_ok": self._ctx.Value("i", 0),
         }
 
 
@@ -152,10 +192,30 @@ class OCRWorker:
         if self._process is not None and self._process.is_alive():
             return
 
+        self._ring = SharedMemoryRing(
+            name=self._shm_name,
+            slots=self._shm_slots,
+            max_h=self._shm_max_h,
+            max_w=self._shm_max_w,
+            channels=self._shm_channels,
+            dtype=self._shm_dtype,
+            create=True,
+        )
         self._stop_event.clear()
         self._process = self._ctx.Process(
             target=_ocr_process_main,
-            args=(self.ocr_in_queue, self.ocr_out_queue, self._stop_event, self._stats),
+            args=(
+                self.ocr_in_queue,
+                self.ocr_out_queue,
+                self._stop_event,
+                self._stats,
+                self._shm_name,
+                self._shm_slots,
+                self._shm_max_h,
+                self._shm_max_w,
+                self._shm_channels,
+                self._shm_dtype,
+            ),
             daemon=False,
         )
         self._process.start()
@@ -174,6 +234,16 @@ class OCRWorker:
                 self._process.terminate()
                 self._process.join(timeout=1.0)
             self._process = None
+        if self._ring is not None:
+            try:
+                self._ring.close()
+            except Exception:
+                pass
+            try:
+                self._ring.unlink()
+            except Exception:
+                pass
+            self._ring = None
 
         # Explicit queue cleanup avoids leaked semaphore warnings at shutdown.
         for q in (self.ocr_in_queue, self.ocr_out_queue):
@@ -193,7 +263,29 @@ class OCRWorker:
         Returns True if accepted. When input queue is full, drops oldest to keep
         latency low and still tries to enqueue the newest task.
         """
-        accepted, dropped = _drop_oldest_and_put(self.ocr_in_queue, item)
+        payload = dict(item)
+        image = payload.get("image")
+        if isinstance(image, np.ndarray) and self._ring is not None:
+            img = image
+            if img.ndim == 2:
+                # LAg bilde på nytt???
+                # Ingen _inc???
+                img = np.repeat(img[:, :, None], 3, axis=2)
+            if img.ndim != 3 or img.shape[2] != self._shm_channels:
+                _inc(self._stats["shm_oversize_drop"])
+                payload["image"] = None
+            elif img.shape[0] > self._shm_max_h or img.shape[1] > self._shm_max_w:
+                _inc(self._stats["shm_oversize_drop"])
+                payload["image"] = None
+            else:
+                slot, h, w = self._ring.write(img)
+                payload.pop("image", None)
+                payload["shm_slot"] = slot
+                payload["shm_h"] = h
+                payload["shm_w"] = w
+                _inc(self._stats["shm_write_ok"])
+
+        accepted, dropped = _drop_oldest_and_put(self.ocr_in_queue, payload)
         if accepted:
             _inc(self._stats["in_enqueued"])
         if dropped:
