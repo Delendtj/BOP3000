@@ -10,6 +10,7 @@ from functions.shm_ring import SharedMemoryRing
 
 _STOP = "__STOP__"
 
+# Benchmark logging
 def _inc(counter, delta: int = 1) -> None:
     if counter is None:
         return
@@ -54,8 +55,14 @@ def _ocr_process_main(
 
     PaddleOCR is initialized in this process context by importing register_helmet
     here (not in parent process), which avoids serialization/pickling issues.
+
+    Currently, it has a lot of room for silent errors and returning empty images.
     """
     from functions.register_helmet import register_helmet
+
+    # We already make a shared memory in start()
+    # We then connect to that same memory space by having create=False and correct name=
+    # This is not a new memory space just new object referring to same place of memory.
     ring = SharedMemoryRing(
         name=shm_name,
         slots=shm_slots,
@@ -84,8 +91,6 @@ def _ocr_process_main(
             bbox = item.get("bbox", (0, 0, 0, 0))
             if "shm_slot" in item:
                 image = ring.read(item["shm_slot"], item["shm_h"], item["shm_w"]).copy()
-            else:
-                image = item.get("image")
 
             # Default result
             if image is None:
@@ -142,7 +147,14 @@ def _ocr_process_main(
 
 
 class OCRWorker:
-    """OCR process wrapper with non-blocking queues."""
+    """
+    OCR process wrapper with non-blocking queues.
+
+    The worker contains logic for queue handling and writing/reading from shared memory ring.
+    The queue handles metadata for the images
+    While the shared memory ring contains the actual image
+    So the queue just contaisn the information it needs to find the image from the memory ring.
+    """
 
     def __init__(
         self,
@@ -156,8 +168,10 @@ class OCRWorker:
         shm_dtype: str = "uint8",
     ):
         self._ctx = mp.get_context(start_method)
-        self.ocr_in_queue: mp.Queue = self._ctx.Queue(maxsize=max_in_size)
-        self.ocr_out_queue: mp.Queue = self._ctx.Queue(maxsize=max_out_size)
+        self.max_in_size = max_in_size
+        self.max_out_size = max_out_size
+        self.ocr_in_queue = self._ctx.Queue(maxsize=max_in_size)
+        self.ocr_out_queue = self._ctx.Queue(maxsize=max_out_size)
         self._stop_event: mp.Event = self._ctx.Event()
         self._process: Optional[mp.Process] = None
         self._ring: Optional[SharedMemoryRing] = None
@@ -168,7 +182,7 @@ class OCRWorker:
         self._shm_channels = int(shm_channels)
         self._shm_dtype = str(shm_dtype)
 
-        # Simply counters for stats
+        # Simply counters for benchmarking
         self._stats: Dict[str, Any] = {
             "in_enqueued": self._ctx.Value("i", 0),
             "in_dequeued": self._ctx.Value("i", 0),
@@ -192,6 +206,11 @@ class OCRWorker:
         if self._process is not None and self._process.is_alive():
             return
 
+        if self.ocr_in_queue is None and self.ocr_out_queue is None:
+            self.ocr_out_queue = self._ctx.Queue(maxsize=self.max_in_size)
+            self.ocr_in_queue = self._ctx.Queue(maxsize=self.max_in_size)
+
+        # Actually create the shared memory space
         self._ring = SharedMemoryRing(
             name=self._shm_name,
             slots=self._shm_slots,
@@ -202,6 +221,8 @@ class OCRWorker:
             create=True,
         )
         self._stop_event.clear()
+
+        # Create the process and start
         self._process = self._ctx.Process(
             target=_ocr_process_main,
             args=(
@@ -226,7 +247,7 @@ class OCRWorker:
         Stops the current running process
         """
         self._stop_event.set()
-        _drop_oldest_and_put(self.ocr_in_queue, _STOP)
+        _drop_oldest_and_put(self.ocr_in_queue, _STOP) # Enqueue a stop Event
 
         if self._process is not None:
             self._process.join(timeout=timeout)
@@ -255,6 +276,8 @@ class OCRWorker:
                 q.join_thread()
             except Exception:
                 pass
+        self.ocr_in_queue = None
+        self.ocr_out_queue = None
 
     def submit(self, item: Dict[str, Any]) -> bool:
         """
@@ -274,9 +297,11 @@ class OCRWorker:
             if img.ndim != 3 or img.shape[2] != self._shm_channels:
                 _inc(self._stats["shm_oversize_drop"])
                 payload["image"] = None
+                print("Image wrong size was dropped!!")
             elif img.shape[0] > self._shm_max_h or img.shape[1] > self._shm_max_w:
                 _inc(self._stats["shm_oversize_drop"])
                 payload["image"] = None
+                print("Image crop is too big and was dropped!!")
             else:
                 slot, h, w = self._ring.write(img)
                 payload.pop("image", None)
