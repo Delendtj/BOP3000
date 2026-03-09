@@ -89,6 +89,9 @@ def _ocr_process_main(
 
             tid = int(item.get("track_id", -1))
             bbox = item.get("bbox", (0, 0, 0, 0))
+
+            image = item.get("image")
+
             if "shm_slot" in item:
                 image = ring.read(item["shm_slot"], item["shm_h"], item["shm_w"]).copy()
 
@@ -206,9 +209,10 @@ class OCRWorker:
         if self._process is not None and self._process.is_alive():
             return
 
-        if self.ocr_in_queue is None and self.ocr_out_queue is None:
-            self.ocr_out_queue = self._ctx.Queue(maxsize=self.max_in_size)
+        if self.ocr_in_queue is None:
             self.ocr_in_queue = self._ctx.Queue(maxsize=self.max_in_size)
+        if self.ocr_out_queue is None:
+            self.ocr_out_queue = self._ctx.Queue(maxsize=self.max_out_size)
 
         # Actually create the shared memory space
         self._ring = SharedMemoryRing(
@@ -247,7 +251,8 @@ class OCRWorker:
         Stops the current running process
         """
         self._stop_event.set()
-        _drop_oldest_and_put(self.ocr_in_queue, _STOP) # Enqueue a stop Event
+        if self.ocr_in_queue is not None:
+            _drop_oldest_and_put(self.ocr_in_queue, _STOP) # Enqueue a stop Event
 
         if self._process is not None:
             self._process.join(timeout=timeout)
@@ -268,6 +273,8 @@ class OCRWorker:
 
         # Explicit queue cleanup avoids leaked semaphore warnings at shutdown.
         for q in (self.ocr_in_queue, self.ocr_out_queue):
+            if q is None:
+                continue
             try:
                 q.close()
             except Exception:
@@ -291,8 +298,7 @@ class OCRWorker:
         if isinstance(image, np.ndarray) and self._ring is not None:
             img = image
             if img.ndim == 2:
-                # LAg bilde på nytt???
-                # Ingen _inc???
+                # Make grayscale images into BGR (2 channels -> 3 channels)
                 img = np.repeat(img[:, :, None], 3, axis=2)
             if img.ndim != 3 or img.shape[2] != self._shm_channels:
                 _inc(self._stats["shm_oversize_drop"])

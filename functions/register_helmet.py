@@ -34,18 +34,12 @@ def register_helmet(helmets, debug=False):
     for helmet in helmets:
         img   = helmet['image']   # numpy array (BGR crop)
         bbox  = helmet['bbox']
-        conf  = helmet['conf']
         tid = helmet['track_id']
 
         if tid == -1:
             continue
 
         processed_img = preprocess_image(img, debug=debug)
-
-        if debug:
-            print("Running OCR...")
-            print("Input shape: ", img.shape)
-            print("Input shape after processing: ", img.shape)
 
         raw = _ocr.predict(processed_img)
 
@@ -99,6 +93,15 @@ def register_helmet(helmets, debug=False):
 
 # Preprocessing av input
 def preprocess_image(image, debug=False):
+    """
+    Process cropped image and return it
+
+    Preprocessing overview:
+    - Grayscale the image
+    - Upscale if image is less than UPSCALE_THRESH
+    - Make the image sharper making a blurred copy and then subtracting it from original image
+    - Convert back to BGR
+    """
 
     # Konverter til GrayScale
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
