@@ -283,6 +283,8 @@ class OCRWorker:
                 q.join_thread()
             except Exception:
                 pass
+
+        # Set them to none so no one can reuse old queues.
         self.ocr_in_queue = None
         self.ocr_out_queue = None
 

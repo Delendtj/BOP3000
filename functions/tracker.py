@@ -1,14 +1,15 @@
+import inspect
 from collections import Counter, defaultdict
 
 import numpy as np
 import supervision as sv
-from numpy import dtype
 from trackers import ByteTrackTracker
 
 # from functions.BBExtractor import extract_helmet_box
 # from functions.register_helmet import register_helmet
 # from functions.roi import bbox_center_in_roi
 
+print(inspect.getsource(ByteTrackTracker))
 
 class Tracker:
     def __init__(self, ocr_votes_count, conf_threshold, roi, frame_rate=30.0):

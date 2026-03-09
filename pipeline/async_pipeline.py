@@ -6,6 +6,8 @@ from dataclasses import dataclass
 from typing import Any, Optional
 
 from functions.Inference_roi import crop_frame_to_roi
+from utilities.downscale_to_1080p import downscale_to_1080p
+
 
 #
 # Datastruktur for en frame
@@ -62,6 +64,9 @@ def _capture_loop(cap: cv2.VideoCapture,
     i = 0
     while not stop_event.is_set():
         ret, frame = cap.read()
+
+        frame = downscale_to_1080p(frame)
+
         if not ret:
             # video ferdig / kamera feilet
             stop_event.set()

@@ -19,6 +19,7 @@ from functions.tracker import Tracker
 from hardware_detector import HardwareDetector
 from pipeline.async_pipeline import AsyncFramePipeline
 from utilities.benchmark import OCRThroughputStats
+from utilities.downscale_to_1080p import downscale_to_1080p
 
 # Keep TensorRT TF32 behavior stable between engine build and execution contexts.
 os.environ.setdefault("NVIDIA_TF32_OVERRIDE", "0")
@@ -74,6 +75,10 @@ def main():
     fps = preview_cap.get(cv2.CAP_PROP_FPS)
     ret, preview_frame = preview_cap.read()
     preview_cap.release()
+
+    # Downscales if it isn't 1080p
+    preview_frame = downscale_to_1080p(preview_frame)
+
     if not ret:
         raise RuntimeError("Could not read initial frame for ROI.")
 
