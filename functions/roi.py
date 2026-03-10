@@ -39,6 +39,33 @@ def save_roi(path, roi):
         json.dump(payload, f, indent=2)
 
 
+def load_line(path):
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if "points" not in data:
+            return None
+        points = [(int(x), int(y)) for x, y in data["points"]]
+        if len(points) == 2:
+            return points
+    except (OSError, KeyError, ValueError, json.JSONDecodeError):
+        return None
+    return None
+
+
+def save_line(path, line):
+    if line is None:
+        return
+    directory = os.path.dirname(path)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+    payload = {"points": [[int(x), int(y)] for x, y in line]}
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2)
+
+
 def select_roi(frame, window_name="ROI Selector"):
     if frame is None:
         return None
@@ -78,6 +105,57 @@ def select_roi(frame, window_name="ROI Selector"):
 
         if key in (13, 10):
             if len(points) >= 3:
+                cv2.destroyWindow(window_name)
+                return points
+        elif key == 27:
+            cv2.destroyWindow(window_name)
+            return None
+        elif key in (ord("u"), ord("U"), 8):
+            if points:
+                points.pop()
+        elif key in (ord("c"), ord("C")):
+            points.clear()
+
+
+def select_line(frame, window_name="Finish Line"):
+    if frame is None:
+        return None
+
+    points = []
+
+    def _on_mouse(event, x, y, _flags, _param):
+        if event == cv2.EVENT_LBUTTONDOWN and len(points) < 2:
+            points.append((int(x), int(y)))
+        elif event == cv2.EVENT_RBUTTONDOWN and points:
+            points.pop()
+
+    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+    cv2.setMouseCallback(window_name, _on_mouse)
+
+    while True:
+        canvas = frame.copy()
+
+        if points:
+            pts = np.array(points, dtype=np.int32)
+            cv2.polylines(canvas, [pts], False, (0, 165, 255), 2)
+            for px, py in points:
+                cv2.circle(canvas, (px, py), 5, (0, 165, 255), -1)
+
+        cv2.putText(
+            canvas,
+            "Right click/U: undo  C: clear  Enter: save  Esc: cancel",
+            (15, 60),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            (0, 165, 255),
+            2,
+        )
+
+        cv2.imshow(window_name, canvas)
+        key = cv2.waitKey(10) & 0xFF
+
+        if key in (13, 10):
+            if len(points) == 2:
                 cv2.destroyWindow(window_name)
                 return points
         elif key == 27:

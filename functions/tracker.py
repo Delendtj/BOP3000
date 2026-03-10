@@ -1,18 +1,13 @@
-import inspect
 from collections import Counter, defaultdict
 
 import numpy as np
 import supervision as sv
+from functions.lap_counter import LapCounter
 from trackers import ByteTrackTracker
 
-# from functions.BBExtractor import extract_helmet_box
-# from functions.register_helmet import register_helmet
-# from functions.roi import bbox_center_in_roi
-
-print(inspect.getsource(ByteTrackTracker))
 
 class Tracker:
-    def __init__(self, ocr_votes_count, conf_threshold, roi, frame_rate=30.0):
+    def __init__(self, ocr_votes_count, conf_threshold, roi, frame_rate=30.0, finish_line=None, total_laps=None):
         self.frame_rate = float(frame_rate) if float(frame_rate) > 0 else 30.0
 
         # Tuned ByteTrack settings for steadier helmet/person IDs.
@@ -38,25 +33,44 @@ class Tracker:
         self.ocr_runs = defaultdict(lambda: {"runs": 0, "cooldown": 0, "votes": []})
         self.helmet_numbers_final = {}
 
-        self.PERSON_CLASS_ID = 1
-        self.HELMET_CLASS_ID = 0
+        self.person_class_id = 1
+        self.helmet_class_id = 0
 
         # Runs we wait before we wait RUNS_COOLDOWN frames before we try again on a given TID
-        self.RUNS_BEFORE_RETRY = ocr_votes_count + 1
-        self.RUNS_COOLDOWN = 5
+        self.runs_before_retry = ocr_votes_count + 1
+        self.runs_cooldown = 5
 
         self.ocr_votes_count = ocr_votes_count
         self.conf_threshold = conf_threshold
         self.roi = roi
 
+        self.lap_counter = LapCounter(frame_rate=self.frame_rate, finish_line=finish_line, total_laps=total_laps)
+
+    @property
+    def total_laps(self):
+        return self.lap_counter.total_laps
+
     def set_roi(self, roi):
         self.roi = roi
 
+    def set_finish_line(self, line):
+        self.lap_counter.set_finish_line(line)
+
+    def set_total_laps(self, total_laps):
+        self.lap_counter.set_total_laps(total_laps)
+
+    def reset_lap_counts(self):
+        self.lap_counter.reset()
+
+    def get_lap_count(self, track_id):
+        return self.lap_counter.get_lap_count(track_id)
+
+    def get_active_lap_counts(self):
+        return self.lap_counter.get_active_lap_counts(self.people_tracks)
+
     def track_detection(self, detections: sv.Detections):
-
-
-        people_detections = detections[detections.class_id == self.PERSON_CLASS_ID]
-        helmet_detections = detections[detections.class_id == self.HELMET_CLASS_ID]
+        people_detections = detections[detections.class_id == self.person_class_id]
+        helmet_detections = detections[detections.class_id == self.helmet_class_id]
 
         people_for_tracker = people_detections[people_detections.confidence > self.conf_threshold]
         helmets_for_tracker = helmet_detections[helmet_detections.confidence > self.conf_threshold]
@@ -74,6 +88,9 @@ class Tracker:
             dtype=object,
         )
 
+    def update_lap_counts(self):
+        self.lap_counter.update(self.people_tracks)
+
     def get_non_confirmed_helmet_tracks(self):
         confirmed_ids = np.array(list(self.helmet_numbers_final.keys()), dtype=int)
 
@@ -84,7 +101,6 @@ class Tracker:
         return self.helmet_tracks[keep]
 
     def check_for_ocr(self, helmets):
-
         non_confirmed_helmets = self.helmet_tracks[
             np.isin(self.helmet_tracks.tracker_id, list(self.helmet_numbers_final.keys()), invert=True)
         ]
@@ -95,8 +111,6 @@ class Tracker:
         if len(helmets) == 0:
             return
 
-        #helmet_results = register_helmet(helmets, debug=True)
-
         allowed_ids = set(non_confirmed_helmets.tracker_id.tolist())
 
         for h in helmets:
@@ -105,19 +119,18 @@ class Tracker:
 
             # Skip ids that are already confirmed
             if tid not in allowed_ids:
-                print("current id: ",tid, " not in allowed id list: ",allowed_ids)
+                print("current id: ", tid, " not in allowed id list: ", allowed_ids)
                 continue
 
             # Skip tracks that isn't confirmed by ByteTrack yet.
             if tid == -1:
                 continue
 
-
             state = self.ocr_runs[tid]
 
-            if state["runs"] >= self.RUNS_BEFORE_RETRY:
+            if state["runs"] >= self.runs_before_retry:
                 state["cooldown"] += 1
-                if state["cooldown"] >= self.RUNS_COOLDOWN:
+                if state["cooldown"] >= self.runs_cooldown:
                     state["runs"] = 0
                     state["cooldown"] = 0
                 continue
@@ -140,7 +153,6 @@ class Tracker:
                     self.helmet_tracks.data["helmet_number"][idxs[0]] = final_number
 
                 self.processed_tracker_ids.add(tid)
-
 
     def annotate(self, frame):
         annotated = self.box_annotator.annotate(frame, self.people_tracks)
