@@ -9,7 +9,6 @@ from trackers import ByteTrackTracker
 # from functions.register_helmet import register_helmet
 # from functions.roi import bbox_center_in_roi
 
-print(inspect.getsource(ByteTrackTracker))
 
 class Tracker:
     def __init__(self, ocr_votes_count, conf_threshold, roi, frame_rate=30.0):

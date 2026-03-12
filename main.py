@@ -8,10 +8,18 @@ import tkinter as tk
 import numpy as np
 import supervision as sv
 
+from collections import deque
+
 from functions.BBExtractor import extract_helmet_box
 from functions.Inference_roi import (
     keep_detections_inside_roi,
     shift_detections_to_full_frame,
+)
+from functions.homography import (
+    associate_close_helmet_crops,
+    build_close_crops,
+    load_homography,
+    select_close_frame, project_point,
 )
 from functions.ocr_worker import OCRWorker
 from functions.roi import load_roi, roi_inside_roi, save_roi, select_roi
@@ -33,9 +41,16 @@ config = {
 }
 
 DATA_PATH = "../videos/DJI_CUT.MP4"
+CLOSE_SOURCE = "../videos/canon_1.mp4"
 CONF_THRESHOLD = 0.5
 FRAME_SKIP = 1
 OCR_VOTE = 3          # collect votes for N frames before deciding
+MAX_SYNC_DELTA = 0.05
+CLOSE_CROP_SIZE = 140
+CLOSE_MATCH_MAX_DIST = 120
+HELMET_CLASS_ID = 0
+PERSON_CLASS_ID = 1
+HOMOGRAPHY_PATH = os.path.join("img", "homography.json")
 
 INFERENCE_CONFIG = {
     'conf': CONF_THRESHOLD,
@@ -60,7 +75,8 @@ def select_ocr_roi_inside_yolo(frame, yolo_roi):
             return None
         if roi_inside_roi(candidate, yolo_roi):
             return candidate
-        print("OCR ROI must be inside YOLO ROI. Draw again or press Esc to cancel.")
+    print("OCR ROI must be inside YOLO ROI. Draw again or press Esc to cancel.")
+
 
 def main():
     detector = HardwareDetector(config)
@@ -101,6 +117,7 @@ def main():
             save_roi(OCR_ROI_PATH, ocr_roi)
 
     cv2.namedWindow('Yolo vision', cv2.WINDOW_NORMAL)
+    cv2.namedWindow('Close vision', cv2.WINDOW_NORMAL)
 
     # THE TRACKER
     tracker = Tracker(OCR_VOTE, CONF_THRESHOLD, ocr_roi, frame_rate=fps)
@@ -112,10 +129,24 @@ def main():
         queue_size=3,
         inference_roi=yolo_roi,
     )
+    pipeline_close = AsyncFramePipeline(
+        source=CLOSE_SOURCE,
+        frame_skip=FRAME_SKIP,
+        queue_size=3,
+        inference_roi=None,
+    )
 
     ocr_worker = OCRWorker()
     ocr_worker.start()
     pipeline.start()
+    pipeline_close.start()
+
+    close_buffer = deque(maxlen=32)
+    try:
+        homography = load_homography(HOMOGRAPHY_PATH)
+    except FileNotFoundError:
+        homography = None
+        print("Homography missing, cross-camera crops disabled.")
 
     # Section for initializing benchmark classes here:
     ocr_bench = OCRThroughputStats(log_every_sec=2.0)
@@ -150,6 +181,13 @@ def main():
                     paused = False
                 continue
 
+            while True:
+                close_item = pipeline_close.read(timeout=0.01)
+
+                if close_item is None:
+                    break
+                close_buffer.append((close_item.ts, close_item.frame.copy()))
+
             item = pipeline.read(timeout=0.5)
             if item is None:
                 if pipeline.stop_event.is_set():
@@ -182,11 +220,63 @@ def main():
             tracker.track_detection(detections)
 
             # Extract better crop from helmet detections and give to worker queue
+            close_frame = None
+            if homography is not None:
+                close_frame = select_close_frame(close_buffer, item.ts, MAX_SYNC_DELTA)
+            if close_frame is None and len(close_buffer) > 0:
+                close_frame = close_buffer[-1][1]
+
             if ocr_roi is not None:
                 helmet_tracks = tracker.get_non_confirmed_helmet_tracks()
                 helmet_in_roi = keep_detections_inside_roi(helmet_tracks, ocr_roi)
-                # Submit crops into OCR worker
-                helmet_crops = extract_helmet_box(helmet_in_roi, frame)
+                close_vis = None
+                if close_frame is not None:
+                    close_vis = close_frame.copy()
+
+                # This whole if contains everything with homography association for helmet
+                if close_frame is not None and homography is not None:
+                    close_result = model(
+                        close_frame,
+                        conf=INFERENCE_CONFIG['conf'],
+                        iou=INFERENCE_CONFIG['iou'],
+                        max_det=INFERENCE_CONFIG['max_det'],
+                        imgsz=INFERENCE_CONFIG['imgsz'],
+                        half=INFERENCE_CONFIG['half'],
+                        device=INFERENCE_CONFIG['device'],
+                        verbose=INFERENCE_CONFIG['verbose']
+                    )[0]
+                    close_detections = sv.Detections.from_ultralytics(close_result)
+                    close_helmets = close_detections[close_detections.class_id == HELMET_CLASS_ID] # Get only helmets
+
+                    # Draw helmets on close frame
+                    if close_vis is not None and len(close_helmets) > 0:
+                        for bbox in close_helmets.xyxy:
+                            x1, y1, x2, y2 = map(int, bbox)
+                            cv2.rectangle(close_vis, (x1, y1), (x2, y2), (0, 255, 255), 2)
+
+                    # Visualize homography with red dots
+                    if close_vis is not None and len(tracker.people_tracks) > 0:
+                        for bbox in tracker.people_tracks.xyxy:
+                            center_x = float((bbox[0] + bbox[2]) / 2.0)
+                            center_y = float(bbox[3])
+                            projected = project_point(homography, center_x, center_y)
+                            if projected is None:
+                                continue
+                            px, py = int(projected[0]), int(projected[1])
+                            if 0 <= px < close_vis.shape[1] and 0 <= py < close_vis.shape[0]:
+                                cv2.circle(close_vis, (px, py), 5, (0, 0, 255), -1)
+
+                    helmet_crops = associate_close_helmet_crops(
+                        close_helmets,
+                        tracker.people_tracks,
+                        close_frame,
+                        homography,
+                        CLOSE_MATCH_MAX_DIST,
+                    )
+                else:
+                    # OLD: Without homography
+                    helmet_crops = extract_helmet_box(helmet_in_roi, frame)
+
                 for h in helmet_crops:
                     ocr_worker.submit(h)
 
@@ -240,6 +330,9 @@ def main():
             display_frame = cv2.resize(annotated, (1920, 1080))
             last_display_frame = display_frame
             cv2.imshow('Yolo vision', display_frame)
+            if close_frame is not None:
+                close_display = cv2.resize(close_vis if close_vis is not None else close_frame, (960, 540))
+                cv2.imshow('Close vision', close_display)
 
             key = cv2.waitKey(1) & 0xFF
             if key == 27:
@@ -269,6 +362,7 @@ def main():
     finally:
         ocr_worker.stop()
         pipeline.stop()
+        pipeline_close.stop()
         cv2.destroyAllWindows()
 
 # Main guard needed for multiprocessing
