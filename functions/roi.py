@@ -2,6 +2,7 @@ import cv2
 import json
 import os
 import numpy as np
+from math import hypot
 
 
 def load_roi(path):
@@ -64,6 +65,35 @@ def save_line(path, line):
     payload = {"points": [[int(x), int(y)] for x, y in line]}
     with open(path, "w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2)
+
+
+def validate_finish_line(line, frame_shape=None, roi=None, min_length_px=20.0, min_vertical_span_px=20.0):
+    if line is None:
+        return None
+    if len(line) != 2:
+        return "Finish line requires exactly two points."
+
+    try:
+        points = [tuple(map(int, pt)) for pt in line]
+    except (TypeError, ValueError):
+        return "Finish line contains invalid points."
+
+    (x1, y1), (x2, y2) = points
+    if hypot(float(x2) - float(x1), float(y2) - float(y1)) < float(min_length_px):
+        return "Finish line is too short."
+    if abs(int(y2) - int(y1)) < int(min_vertical_span_px):
+        return "Finish line must have clear vertical span for left-to-right counting."
+
+    if frame_shape is not None:
+        height, width = frame_shape[:2]
+        for px, py in points:
+            if px < 0 or py < 0 or px >= width or py >= height:
+                return "Finish line must stay inside the frame."
+
+    if roi is not None and not all(point_in_roi(pt, roi) for pt in points):
+        return "Finish line endpoints must be inside the YOLO ROI."
+
+    return None
 
 
 def select_roi(frame, window_name="ROI Selector"):
@@ -143,13 +173,23 @@ def select_line(frame, window_name="Finish Line"):
 
         cv2.putText(
             canvas,
-            "Right click/U: undo  C: clear  Enter: save  Esc: cancel",
+            "Left click: add  Right click/U: undo  C: clear  Enter: save  Esc: cancel",
             (15, 60),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.6,
             (0, 165, 255),
             2,
         )
+        cv2.putText(
+            canvas,
+            "Lap counts use the line bottom-right point and score left to right.",
+            (15, 90),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            (0, 165, 255),
+            2,
+        )
+        cv2.arrowedLine(canvas, (15, 118), (115, 118), (0, 165, 255), 3, tipLength=0.2)
 
         cv2.imshow(window_name, canvas)
         key = cv2.waitKey(10) & 0xFF

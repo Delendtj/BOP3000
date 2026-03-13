@@ -16,7 +16,16 @@ from functions.Inference_roi import (
 )
 from functions.lap_panel import render_lap_panel
 from functions.ocr_worker import OCRWorker
-from functions.roi import load_line, load_roi, roi_inside_roi, save_line, save_roi, select_line, select_roi
+from functions.roi import (
+    load_line,
+    load_roi,
+    roi_inside_roi,
+    save_line,
+    save_roi,
+    select_line,
+    select_roi,
+    validate_finish_line,
+)
 from functions.tracker import Tracker
 from hardware_detector import HardwareDetector
 from pipeline.async_pipeline import AsyncFramePipeline
@@ -35,7 +44,7 @@ config = {
 }
 
 data_path = "DJI_20260228140513_0010_D.MP4"
-conf_threshold = 0.5
+conf_threshold = 0.3
 frame_skip = 1
 ocr_vote = 3          # collect votes for N frames before deciding
 
@@ -125,6 +134,10 @@ def main():
             save_roi(ocr_roi_path, ocr_roi)
 
     finish_line = load_line(finish_line_path)
+    finish_line_error = validate_finish_line(finish_line, frame_shape=preview_frame.shape, roi=yolo_roi)
+    if finish_line_error is not None:
+        print(f"Ignoring saved finish line: {finish_line_error}")
+        finish_line = None
 
     cv2.namedWindow(vision_window_name, cv2.WINDOW_NORMAL)
     cv2.resizeWindow(vision_window_name, display_width, display_height)
@@ -262,9 +275,14 @@ def main():
                 cv2.circle(annotated, end_pt, 6, (0, 140, 255), -1)
                 label_x = int((start_pt[0] + end_pt[0]) / 2)
                 label_y = int((start_pt[1] + end_pt[1]) / 2) - 10
+                frame_height, frame_width = annotated.shape[:2]
+                arrow_y = max(30, label_y - 22)
+                arrow_start = (max(15, label_x - 50), arrow_y)
+                arrow_end = (min(frame_width - 15, label_x + 50), arrow_y)
+                cv2.arrowedLine(annotated, arrow_start, arrow_end, (0, 165, 255), 3, tipLength=0.2)
                 cv2.putText(
                     annotated,
-                    "FINISH",
+                    "FINISH L->R",
                     (label_x, label_y),
                     cv2.FONT_HERSHEY_SIMPLEX,
                     0.7,
@@ -335,6 +353,11 @@ def main():
                         print("Current OCR ROI is outside updated YOLO ROI. Press 'o' to redraw OCR ROI.")
                         ocr_roi = None
                         tracker.set_roi(None)
+                    finish_line_error = validate_finish_line(finish_line, frame_shape=frame.shape, roi=yolo_roi)
+                    if finish_line_error is not None:
+                        print(f"Current finish line was cleared: {finish_line_error}")
+                        finish_line = None
+                        tracker.set_finish_line(None)
             if key == ord("o"):
                 if yolo_roi is None:
                     print("Define YOLO ROI first (press 'r').")
@@ -347,9 +370,20 @@ def main():
             if key == ord("f"):
                 new_finish_line = select_line(frame, window_name="Finish Line Selector")
                 if new_finish_line is not None:
-                    finish_line = new_finish_line
-                    tracker.set_finish_line(finish_line)
-                    save_line(finish_line_path, finish_line)
+                    finish_line_error = validate_finish_line(
+                        new_finish_line,
+                        frame_shape=frame.shape,
+                        roi=yolo_roi,
+                    )
+                    if finish_line_error is not None:
+                        print(f"Finish line not saved: {finish_line_error}")
+                    else:
+                        line_changed = new_finish_line != finish_line
+                        finish_line = new_finish_line
+                        tracker.set_finish_line(finish_line)
+                        if line_changed:
+                            print("Finish line updated. Lap counts reset.")
+                        save_line(finish_line_path, finish_line)
     finally:
         ocr_worker.stop()
         pipeline.stop()
