@@ -64,6 +64,8 @@ INFERENCE_CONFIG = {
 
 YOLO_ROI_PATH = os.path.join("img", "yolo_roi.json")
 OCR_ROI_PATH = os.path.join("img", "ocr_roi.json")
+CLOSE_YOLO_ROI_PATH = os.path.join("img", "close_yolo_roi.json")
+CLOSE_OCR_ROI_PATH = os.path.join("img", "close_ocr_roi.json")
 
 def select_ocr_roi_inside_yolo(frame, yolo_roi):
     if frame is None or yolo_roi is None:
@@ -92,11 +94,15 @@ def main():
     ret, preview_frame = preview_cap.read()
     preview_cap.release()
 
-    # Downscales if it isn't 1080p
     preview_frame = downscale_to_1080p(preview_frame)
-
     if not ret:
         raise RuntimeError("Could not read initial frame for ROI.")
+
+    close_preview_cap = cv2.VideoCapture(CLOSE_SOURCE)
+    close_ret, close_preview_frame = close_preview_cap.read()
+    close_preview_cap.release()
+    if not close_ret:
+        raise RuntimeError("Could not read initial close frame for ROI.")
 
     # ROI
     yolo_roi = load_roi(YOLO_ROI_PATH)
@@ -116,6 +122,23 @@ def main():
             ocr_roi = selected_ocr
             save_roi(OCR_ROI_PATH, ocr_roi)
 
+    close_yolo_roi = load_roi(CLOSE_YOLO_ROI_PATH)
+    if close_yolo_roi is None:
+        close_yolo_roi = select_roi(close_preview_frame, window_name="Close YOLO ROI Selector")
+        if close_yolo_roi is not None:
+            save_roi(CLOSE_YOLO_ROI_PATH, close_yolo_roi)
+
+    close_ocr_roi = load_roi(CLOSE_OCR_ROI_PATH)
+    if close_ocr_roi is not None and close_yolo_roi is not None and not roi_inside_roi(close_ocr_roi, close_yolo_roi):
+        print("Loaded close OCR ROI is outside close YOLO ROI. Please redraw.")
+        close_ocr_roi = None
+
+    if close_ocr_roi is None and close_yolo_roi is not None:
+        selected_close_ocr = select_ocr_roi_inside_yolo(close_preview_frame, close_yolo_roi)
+        if selected_close_ocr is not None:
+            close_ocr_roi = selected_close_ocr
+            save_roi(CLOSE_OCR_ROI_PATH, close_ocr_roi)
+
     cv2.namedWindow('Yolo vision', cv2.WINDOW_NORMAL)
     cv2.namedWindow('Close vision', cv2.WINDOW_NORMAL)
 
@@ -133,7 +156,7 @@ def main():
         source=CLOSE_SOURCE,
         frame_skip=FRAME_SKIP,
         queue_size=3,
-        inference_roi=None,
+        inference_roi=close_yolo_roi,
     )
 
     ocr_worker = OCRWorker()
@@ -246,7 +269,11 @@ def main():
                         verbose=INFERENCE_CONFIG['verbose']
                     )[0]
                     close_detections = sv.Detections.from_ultralytics(close_result)
+                    if close_yolo_roi is not None:
+                        close_detections = keep_detections_inside_roi(close_detections, close_yolo_roi)
                     close_helmets = close_detections[close_detections.class_id == HELMET_CLASS_ID] # Get only helmets
+                    if close_ocr_roi is not None:
+                        close_helmets = keep_detections_inside_roi(close_helmets, close_ocr_roi)
 
                     # Draw helmets on close frame
                     if close_vis is not None and len(close_helmets) > 0:
@@ -331,7 +358,25 @@ def main():
             last_display_frame = display_frame
             cv2.imshow('Yolo vision', display_frame)
             if close_frame is not None:
-                close_display = cv2.resize(close_vis if close_vis is not None else close_frame, (960, 540))
+                if close_vis is None:
+                    close_vis = close_frame.copy()
+                if close_yolo_roi is not None:
+                    cv2.polylines(
+                        close_vis,
+                        [np.array(close_yolo_roi, dtype=np.int32)],
+                        True,
+                        (0, 255, 255),
+                        2,
+                    )
+                if close_ocr_roi is not None:
+                    cv2.polylines(
+                        close_vis,
+                        [np.array(close_ocr_roi, dtype=np.int32)],
+                        True,
+                        (0, 200, 0),
+                        2,
+                    )
+                close_display = cv2.resize(close_vis, (960, 540))
                 cv2.imshow('Close vision', close_display)
 
             key = cv2.waitKey(1) & 0xFF
@@ -359,6 +404,26 @@ def main():
                         ocr_roi = new_ocr_roi
                         tracker.set_roi(ocr_roi)
                         save_roi(OCR_ROI_PATH, ocr_roi)
+            if key == ord("c"):
+                if close_yolo_roi is None:
+                    close_yolo_roi = select_roi(close_preview_frame, window_name="Close YOLO ROI Selector")
+                    if close_yolo_roi is not None:
+                        save_roi(CLOSE_YOLO_ROI_PATH, close_yolo_roi)
+                        pipeline_close.set_inference_roi(close_yolo_roi)
+                else:
+                    new_close_yolo = select_roi(close_preview_frame, window_name="Close YOLO ROI Selector")
+                    if new_close_yolo is not None:
+                        close_yolo_roi = new_close_yolo
+                        save_roi(CLOSE_YOLO_ROI_PATH, close_yolo_roi)
+                        pipeline_close.set_inference_roi(close_yolo_roi)
+            if key == ord("v"):
+                if close_yolo_roi is None:
+                    print("Define close YOLO ROI first (press 'c').")
+                else:
+                    new_close_ocr = select_ocr_roi_inside_yolo(close_preview_frame, close_yolo_roi)
+                    if new_close_ocr is not None:
+                        close_ocr_roi = new_close_ocr
+                        save_roi(CLOSE_OCR_ROI_PATH, close_ocr_roi)
     finally:
         ocr_worker.stop()
         pipeline.stop()
