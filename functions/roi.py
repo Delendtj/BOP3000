@@ -2,6 +2,7 @@ import cv2
 import json
 import os
 import numpy as np
+from math import hypot
 
 
 def load_roi(path):
@@ -37,6 +38,62 @@ def save_roi(path, roi):
     payload = {"points": [[int(x), int(y)] for x, y in roi]}
     with open(path, "w", encoding="utf-8") as f:
         json.dump(payload, f, indent=2)
+
+
+def load_line(path):
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        if "points" not in data:
+            return None
+        points = [(int(x), int(y)) for x, y in data["points"]]
+        if len(points) == 2:
+            return points
+    except (OSError, KeyError, ValueError, json.JSONDecodeError):
+        return None
+    return None
+
+
+def save_line(path, line):
+    if line is None:
+        return
+    directory = os.path.dirname(path)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
+    payload = {"points": [[int(x), int(y)] for x, y in line]}
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(payload, f, indent=2)
+
+
+def validate_finish_line(line, frame_shape=None, roi=None, min_length_px=20.0, min_vertical_span_px=20.0):
+    if line is None:
+        return None
+    if len(line) != 2:
+        return "Finish line requires exactly two points."
+
+    try:
+        points = [tuple(map(int, pt)) for pt in line]
+    except (TypeError, ValueError):
+        return "Finish line contains invalid points."
+
+    (x1, y1), (x2, y2) = points
+    if hypot(float(x2) - float(x1), float(y2) - float(y1)) < float(min_length_px):
+        return "Finish line is too short."
+    if abs(int(y2) - int(y1)) < int(min_vertical_span_px):
+        return "Finish line must have clear vertical span for left-to-right counting."
+
+    if frame_shape is not None:
+        height, width = frame_shape[:2]
+        for px, py in points:
+            if px < 0 or py < 0 or px >= width or py >= height:
+                return "Finish line must stay inside the frame."
+
+    if roi is not None and not all(point_in_roi(pt, roi) for pt in points):
+        return "Finish line endpoints must be inside the YOLO ROI."
+
+    return None
 
 
 def select_roi(frame, window_name="ROI Selector"):
@@ -78,6 +135,67 @@ def select_roi(frame, window_name="ROI Selector"):
 
         if key in (13, 10):
             if len(points) >= 3:
+                cv2.destroyWindow(window_name)
+                return points
+        elif key == 27:
+            cv2.destroyWindow(window_name)
+            return None
+        elif key in (ord("u"), ord("U"), 8):
+            if points:
+                points.pop()
+        elif key in (ord("c"), ord("C")):
+            points.clear()
+
+
+def select_line(frame, window_name="Finish Line"):
+    if frame is None:
+        return None
+
+    points = []
+
+    def _on_mouse(event, x, y, _flags, _param):
+        if event == cv2.EVENT_LBUTTONDOWN and len(points) < 2:
+            points.append((int(x), int(y)))
+        elif event == cv2.EVENT_RBUTTONDOWN and points:
+            points.pop()
+
+    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+    cv2.setMouseCallback(window_name, _on_mouse)
+
+    while True:
+        canvas = frame.copy()
+
+        if points:
+            pts = np.array(points, dtype=np.int32)
+            cv2.polylines(canvas, [pts], False, (0, 165, 255), 2)
+            for px, py in points:
+                cv2.circle(canvas, (px, py), 5, (0, 165, 255), -1)
+
+        cv2.putText(
+            canvas,
+            "Left click: add  Right click/U: undo  C: clear  Enter: save  Esc: cancel",
+            (15, 60),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            (0, 165, 255),
+            2,
+        )
+        cv2.putText(
+            canvas,
+            "Lap counts use the line bottom-right point and score left to right.",
+            (15, 90),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.6,
+            (0, 165, 255),
+            2,
+        )
+        cv2.arrowedLine(canvas, (15, 118), (115, 118), (0, 165, 255), 3, tipLength=0.2)
+
+        cv2.imshow(window_name, canvas)
+        key = cv2.waitKey(10) & 0xFF
+
+        if key in (13, 10):
+            if len(points) == 2:
                 cv2.destroyWindow(window_name)
                 return points
         elif key == 27:

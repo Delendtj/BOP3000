@@ -4,6 +4,7 @@ import cv2
 import os
 import time
 import tkinter as tk
+from tkinter import simpledialog
 
 import numpy as np
 import supervision as sv
@@ -13,8 +14,18 @@ from functions.Inference_roi import (
     keep_detections_inside_roi,
     shift_detections_to_full_frame,
 )
+from functions.lap_panel import render_lap_panel
 from functions.ocr_worker import OCRWorker
-from functions.roi import load_roi, roi_inside_roi, save_roi, select_roi
+from functions.roi import (
+    load_line,
+    load_roi,
+    roi_inside_roi,
+    save_line,
+    save_roi,
+    select_line,
+    select_roi,
+    validate_finish_line,
+)
 from functions.tracker import Tracker
 from hardware_detector import HardwareDetector
 from pipeline.async_pipeline import AsyncFramePipeline
@@ -32,23 +43,30 @@ config = {
     'IMGSZ': 1280,
 }
 
-DATA_PATH = "../videos/DJI_CUT.MP4"
-CONF_THRESHOLD = 0.5
-FRAME_SKIP = 1
-OCR_VOTE = 3          # collect votes for N frames before deciding
+data_path = "DJI_20260228140513_0010_D.MP4"
+conf_threshold = 0.3
+frame_skip = 1
+ocr_vote = 3          # collect votes for N frames before deciding
 
-INFERENCE_CONFIG = {
-    'conf': CONF_THRESHOLD,
+inference_config = {
+    'conf': conf_threshold,
     'iou': 0.5,
     'max_det': 100,
     'imgsz': 1280,
-    'half': False, # Switch til True hvis du bruker GPU
+    'half': True, # Switch til True hvis du bruker GPU
     'device': None, # Same here
     'verbose': False,
 }
 
-YOLO_ROI_PATH = os.path.join("img", "yolo_roi.json")
-OCR_ROI_PATH = os.path.join("img", "ocr_roi.json")
+yolo_roi_path = os.path.join("data", "yolo_roi.json")
+ocr_roi_path = os.path.join("data", "ocr_roi.json")
+finish_line_path = os.path.join("data", "finish_line.json")
+display_width = 1920
+display_height = 1080
+lap_panel_width = 340
+lap_panel_height = 720
+vision_window_name = "SpeedSkate"
+lap_window_name = "Lap Count"
 
 def select_ocr_roi_inside_yolo(frame, yolo_roi):
     if frame is None or yolo_roi is None:
@@ -61,17 +79,32 @@ def select_ocr_roi_inside_yolo(frame, yolo_roi):
         if roi_inside_roi(candidate, yolo_roi):
             return candidate
         print("OCR ROI must be inside YOLO ROI. Draw again or press Esc to cancel.")
+def prompt_total_laps():
+    root = tk.Tk()
+    root.withdraw()
+    root.attributes("-topmost", True)
+
+    try:
+        while True:
+            total_laps = simpledialog.askinteger(
+                "Race Laps",
+                "Enter total laps for this race:",
+                minvalue=1,
+                parent=root,
+            )
+            if total_laps is not None:
+                return int(total_laps)
+    finally:
+        root.destroy()
 
 def main():
     detector = HardwareDetector(config)
     model = detector.initialize_model()
 
-    # Screen resolution for window sizing
-    root = tk.Tk()
-    root.destroy()
+    total_laps = prompt_total_laps()
 
     # Open video
-    preview_cap = cv2.VideoCapture(DATA_PATH)
+    preview_cap = cv2.VideoCapture(data_path)
     fps = preview_cap.get(cv2.CAP_PROP_FPS)
     ret, preview_frame = preview_cap.read()
     preview_cap.release()
@@ -83,13 +116,13 @@ def main():
         raise RuntimeError("Could not read initial frame for ROI.")
 
     # ROI
-    yolo_roi = load_roi(YOLO_ROI_PATH)
+    yolo_roi = load_roi(yolo_roi_path)
     if yolo_roi is None:
         yolo_roi = select_roi(preview_frame, window_name="YOLO ROI Selector")
         if yolo_roi is not None:
-            save_roi(YOLO_ROI_PATH, yolo_roi)
+            save_roi(yolo_roi_path, yolo_roi)
 
-    ocr_roi = load_roi(OCR_ROI_PATH)
+    ocr_roi = load_roi(ocr_roi_path)
     if ocr_roi is not None and yolo_roi is not None and not roi_inside_roi(ocr_roi, yolo_roi):
         print("Loaded OCR ROI is outside YOLO ROI. Please redraw OCR ROI.")
         ocr_roi = None
@@ -98,17 +131,33 @@ def main():
         selected_ocr = select_ocr_roi_inside_yolo(preview_frame, yolo_roi)
         if selected_ocr is not None:
             ocr_roi = selected_ocr
-            save_roi(OCR_ROI_PATH, ocr_roi)
+            save_roi(ocr_roi_path, ocr_roi)
 
-    cv2.namedWindow('Yolo vision', cv2.WINDOW_NORMAL)
+    finish_line = load_line(finish_line_path)
+    finish_line_error = validate_finish_line(finish_line, frame_shape=preview_frame.shape, roi=yolo_roi)
+    if finish_line_error is not None:
+        print(f"Ignoring saved finish line: {finish_line_error}")
+        finish_line = None
+
+    cv2.namedWindow(vision_window_name, cv2.WINDOW_NORMAL)
+    cv2.resizeWindow(vision_window_name, display_width, display_height)
+    cv2.namedWindow(lap_window_name, cv2.WINDOW_NORMAL)
+    cv2.resizeWindow(lap_window_name, lap_panel_width, lap_panel_height)
 
     # THE TRACKER
-    tracker = Tracker(OCR_VOTE, CONF_THRESHOLD, ocr_roi, frame_rate=fps)
+    tracker = Tracker(
+        ocr_vote,
+        conf_threshold,
+        ocr_roi,
+        frame_rate=fps,
+        finish_line=finish_line,
+        total_laps=total_laps,
+    )
 
     # Initialize threads and processes
     pipeline = AsyncFramePipeline(
-        source=DATA_PATH,
-        frame_skip=FRAME_SKIP,
+        source=data_path,
+        frame_skip=frame_skip,
         queue_size=3,
         inference_roi=yolo_roi,
     )
@@ -125,8 +174,10 @@ def main():
     frame_count = 0
     paused = False
     last_display_frame = None
+    last_lap_panel = None
+    last_lap_panel_key = None
 
-    print("Controls: Esc=quit, Space=pause/resume, r=redraw YOLO ROI, o=redraw OCR ROI")
+    print("Controls: Esc=quit, Space=pause/resume, r=redraw YOLO ROI, o=redraw OCR ROI, f=redraw finish line")
 
     try:
         while True:
@@ -142,7 +193,9 @@ def main():
                     (0, 255, 255),
                     2,
                 )
-                cv2.imshow('Yolo vision', paused_frame)
+                cv2.imshow(vision_window_name, paused_frame)
+                if last_lap_panel is not None:
+                    cv2.imshow(lap_window_name, last_lap_panel)
                 key = cv2.waitKey(30) & 0xFF
                 if key == 27:
                     break
@@ -164,13 +217,13 @@ def main():
 
             result = model(
                 inference_frame,
-                conf=INFERENCE_CONFIG['conf'],
-                iou=INFERENCE_CONFIG['iou'],
-                max_det=INFERENCE_CONFIG['max_det'],
-                imgsz=INFERENCE_CONFIG['imgsz'],
-                half=INFERENCE_CONFIG['half'],
-                device=INFERENCE_CONFIG['device'],
-                verbose=INFERENCE_CONFIG['verbose']
+                conf=inference_config['conf'],
+                iou=inference_config['iou'],
+                max_det=inference_config['max_det'],
+                imgsz=inference_config['imgsz'],
+                half=inference_config['half'],
+                device=inference_config['device'],
+                verbose=inference_config['verbose']
             )[0]
 
             detections = sv.Detections.from_ultralytics(result)
@@ -180,6 +233,7 @@ def main():
 
             # Run the Tracker
             tracker.track_detection(detections)
+            tracker.update_lap_counts()
 
             # Extract better crop from helmet detections and give to worker queue
             if ocr_roi is not None:
@@ -213,6 +267,28 @@ def main():
                     (0, 200, 0),
                     2,
                 )
+            if finish_line is not None:
+                start_pt = tuple(int(v) for v in finish_line[0])
+                end_pt = tuple(int(v) for v in finish_line[1])
+                cv2.line(annotated, start_pt, end_pt, (0, 165, 255), 3)
+                cv2.circle(annotated, start_pt, 6, (0, 255, 255), -1)
+                cv2.circle(annotated, end_pt, 6, (0, 140, 255), -1)
+                label_x = int((start_pt[0] + end_pt[0]) / 2)
+                label_y = int((start_pt[1] + end_pt[1]) / 2) - 10
+                frame_height, frame_width = annotated.shape[:2]
+                arrow_y = max(30, label_y - 22)
+                arrow_start = (max(15, label_x - 50), arrow_y)
+                arrow_end = (min(frame_width - 15, label_x + 50), arrow_y)
+                cv2.arrowedLine(annotated, arrow_start, arrow_end, (0, 165, 255), 3, tipLength=0.2)
+                cv2.putText(
+                    annotated,
+                    "FINISH L->R",
+                    (label_x, label_y),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.7,
+                    (0, 165, 255),
+                    2,
+                )
 
             now = time.perf_counter()
             if prev_frame_time is not None:
@@ -237,9 +313,29 @@ def main():
                 2,
             )
 
-            display_frame = cv2.resize(annotated, (1920, 1080))
-            last_display_frame = display_frame
-            cv2.imshow('Yolo vision', display_frame)
+            lap_rows = tracker.get_active_lap_counts()
+            lap_panel_key = (
+                finish_line is not None,
+                int(tracker.total_laps),
+                tuple(
+                    (row["track_id"], row["lap_count"], row["predicted"])
+                    for row in lap_rows
+                ),
+            )
+            if lap_panel_key != last_lap_panel_key:
+                last_lap_panel = render_lap_panel(
+                    lap_panel_height,
+                    lap_panel_width,
+                    lap_rows,
+                    finish_line is not None,
+                    tracker.total_laps,
+                )
+                last_lap_panel_key = lap_panel_key
+
+            last_display_frame = annotated
+            cv2.imshow(vision_window_name, annotated)
+            if last_lap_panel is not None:
+                cv2.imshow(lap_window_name, last_lap_panel)
 
             key = cv2.waitKey(1) & 0xFF
             if key == 27:
@@ -252,11 +348,16 @@ def main():
                 if new_yolo_roi is not None:
                     yolo_roi = new_yolo_roi
                     pipeline.set_inference_roi(yolo_roi)
-                    save_roi(YOLO_ROI_PATH, yolo_roi)
+                    save_roi(yolo_roi_path, yolo_roi)
                     if ocr_roi is not None and not roi_inside_roi(ocr_roi, yolo_roi):
                         print("Current OCR ROI is outside updated YOLO ROI. Press 'o' to redraw OCR ROI.")
                         ocr_roi = None
                         tracker.set_roi(None)
+                    finish_line_error = validate_finish_line(finish_line, frame_shape=frame.shape, roi=yolo_roi)
+                    if finish_line_error is not None:
+                        print(f"Current finish line was cleared: {finish_line_error}")
+                        finish_line = None
+                        tracker.set_finish_line(None)
             if key == ord("o"):
                 if yolo_roi is None:
                     print("Define YOLO ROI first (press 'r').")
@@ -265,7 +366,24 @@ def main():
                     if new_ocr_roi is not None:
                         ocr_roi = new_ocr_roi
                         tracker.set_roi(ocr_roi)
-                        save_roi(OCR_ROI_PATH, ocr_roi)
+                        save_roi(ocr_roi_path, ocr_roi)
+            if key == ord("f"):
+                new_finish_line = select_line(frame, window_name="Finish Line Selector")
+                if new_finish_line is not None:
+                    finish_line_error = validate_finish_line(
+                        new_finish_line,
+                        frame_shape=frame.shape,
+                        roi=yolo_roi,
+                    )
+                    if finish_line_error is not None:
+                        print(f"Finish line not saved: {finish_line_error}")
+                    else:
+                        line_changed = new_finish_line != finish_line
+                        finish_line = new_finish_line
+                        tracker.set_finish_line(finish_line)
+                        if line_changed:
+                            print("Finish line updated. Lap counts reset.")
+                        save_line(finish_line_path, finish_line)
     finally:
         ocr_worker.stop()
         pipeline.stop()
