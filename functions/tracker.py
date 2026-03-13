@@ -1,4 +1,3 @@
-import inspect
 from collections import Counter, defaultdict
 
 import numpy as np
@@ -104,7 +103,6 @@ class Tracker:
 
             # Skip ids that are already confirmed
             if tid not in allowed_ids:
-                print("current id: ",tid, " not in allowed id list: ",allowed_ids)
                 continue
 
             # Skip tracks that isn't confirmed by ByteTrack yet.

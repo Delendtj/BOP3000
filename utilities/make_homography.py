@@ -1,8 +1,34 @@
-import os
+import argparse
+import json
 
-import cv2, json, numpy as np
+import cv2
+import numpy as np
+
+from utilities.downscale_to_1080p import downscale_to_1080p
 
 DISPLAY_MAX = (1280, 720)
+
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Create a wide-to-close homography for the multi-camera matcher."
+    )
+    parser.add_argument(
+        "--wide",
+        required=True,
+        help="Path to the wide source used as DATA_PATH at runtime.",
+    )
+    parser.add_argument(
+        "--close",
+        required=True,
+        help="Path to the close source used as CLOSE_SOURCE at runtime.",
+    )
+    parser.add_argument(
+        "--output",
+        default="img/homography.json",
+        help="Output path for the wide-to-close homography JSON.",
+    )
+    return parser.parse_args()
 
 
 def collect_points(name, image):
@@ -30,33 +56,49 @@ def collect_points(name, image):
     cv2.destroyWindow(name)
     return np.array(pts, dtype=np.float32)
 
-close_path = "../videos/DJI_CUT.MP4"
-wide_path = "../videos/canon_1.mp4"
 
-wide_cap = cv2.VideoCapture(wide_path)
-_, wide = wide_cap.read()
-wide_cap.release()
+def load_preview_frame(path: str) -> np.ndarray:
+    cap = cv2.VideoCapture(path)
+    ret, frame = cap.read()
+    cap.release()
 
-close_cap = cv2.VideoCapture(close_path)
-_, close = close_cap.read()
-close_cap.release()
+    if not ret or not isinstance(frame, np.ndarray):
+        raise RuntimeError(f"Could not read a frame from {path}.")
 
-if not isinstance(wide, np.ndarray) or not isinstance(close, np.ndarray):
-    raise RuntimeError("Could not read frames from the provided videos.")
-
-wide_pts = collect_points("Wide", wide)
-close_pts = collect_points("Close", close)
-
-if len(wide_pts) < 4 or len(close_pts) < 4:
-    raise RuntimeError("Need at least four correspondences for a valid homography.")
-H, _ = cv2.findHomography(wide_pts, close_pts, cv2.RANSAC, 5.0)
-with open("img/homography.json", "w") as f:
-  json.dump({"H": H.tolist()}, f)
+    return downscale_to_1080p(frame)
 
 
-try:
-    HOMOGRAPHY_PATH = os.path.join("img", "homography.json")
-    with open(HOMOGRAPHY_PATH, "r") as f:
-        print("Homography successfully created")
-except FileNotFoundError:
-    print("Could not create homography file")
+def main():
+    args = parse_args()
+
+    wide_frame = load_preview_frame(args.wide)
+    close_frame = load_preview_frame(args.close)
+
+    wide_pts = collect_points("Wide", wide_frame)
+    close_pts = collect_points("Close", close_frame)
+
+    if len(wide_pts) < 4 or len(close_pts) < 4:
+        raise RuntimeError("Need at least four correspondences for a valid homography.")
+
+    H, _ = cv2.findHomography(wide_pts, close_pts, cv2.RANSAC, 5.0)
+    if H is None:
+        raise RuntimeError("Could not estimate a homography from the selected points.")
+
+    with open(args.output, "w", encoding="utf-8") as f:
+        json.dump(
+            {
+                "H": H.tolist(),
+                "direction": {
+                    "source_role": "wide",
+                    "target_role": "close",
+                },
+            },
+            f,
+            indent=2,
+        )
+
+    print(f"Saved wide->close homography to {args.output}")
+
+
+if __name__ == "__main__":
+    main()
