@@ -1,3 +1,6 @@
+#import fra Msna for valid input nmbr list match med OCR
+from functions.helmet_validator import HelmetValidator
+
 from collections import Counter, defaultdict
 
 import numpy as np
@@ -44,6 +47,8 @@ class Tracker:
         self.ocr_frames = ocr_frames
         self.conf_threshold = conf_threshold
         self.roi = roi
+        #validate lagt til av Masna
+        self.validator = HelmetValidator(csv_path="valid_helmets.csv")
 
     def set_roi(self, roi):
         self.roi = roi
@@ -117,10 +122,13 @@ class Tracker:
 
             print("tid:", tid, "votes:", state["votes"])
             if len(state["votes"]) >= self.ocr_frames and tid not in self.helmet_numbers_final:
-                final_number = Counter(state["votes"]).most_common(1)[0][0]
-                self.helmet_numbers_final[tid] = final_number
-                print(f"Tracker {tid} final helmet number: {final_number}")
 
+                #with validation self
+                final_number = Counter(state["votes"]).most_common(1)[0][0]
+                validation = self.validator.validate(final_number)
+                self.helmet_numbers_final[tid] = final_number
+
+                print(f"Tracker {tid} final helmet number: {final_number} — {validation['status']}")
                 mask = self.helmet_tracks.tracker_id == tid
                 idxs = np.where(mask)[0]
                 if len(idxs) > 0:

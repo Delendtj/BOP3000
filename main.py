@@ -22,7 +22,7 @@ config = {
     'IMGSZ': 1280,
 }
 
-DATA_PATH = "DJI_20260228140513_0010_D.MP4"
+DATA_PATH = r"C:\Users\masna\Downloads\Video.mp4"
 CONF_THRESHOLD = 0.3
 FRAME_SKIP = 1
 OCR_FRAMES = 3          # collect votes for N frames before deciding
