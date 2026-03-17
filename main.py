@@ -213,9 +213,9 @@ def main():
     latest_close_item = None
     try:
         homography = load_homography(HOMOGRAPHY_PATH)
-        if homography.source_role != "wide" or homography.target_role != "close":
+        if homography.source_role != "close" or homography.target_role != "wide":
             raise RuntimeError(
-                f"Homography must map wide -> close, got {homography.source_role} -> {homography.target_role}."
+                f"Homography must map close -> wide, got {homography.source_role} -> {homography.target_role}."
             )
         print(
             f"Loaded homography direction: {homography.source_role} -> {homography.target_role}"
@@ -301,13 +301,18 @@ def main():
             tracker.track_detection(detections)
 
             # Extract better crop from helmet detections and give to worker queue
+            close_frame = None
+            close_inference_frame = None
             synced_close_item = None
             if homography is not None:
-                close_frame = select_close_frame(close_buffer, item.ts, MAX_SYNC_DELTA)
-            # Fallback to latest frame in queue
-            if close_frame is None and len(close_buffer) > 0:
-                close_frame = close_buffer[-1][1]
                 synced_close_item = select_close_frame(close_buffer, item.ts, MAX_SYNC_DELTA)
+                if synced_close_item is not None:
+                    close_frame = synced_close_item.frame
+                    close_inference_frame = (
+                        synced_close_item.inference_frame
+                        if synced_close_item.inference_frame is not None
+                        else close_frame
+                    )
 
             close_vis = None
             latest_close_frame = latest_close_item.frame if latest_close_item is not None else None
@@ -330,16 +335,10 @@ def main():
                                 )
                                 last_close_sync_log = now
                     else:
-                        close_frame = synced_close_item.frame
-                        close_inference_frame = (
-                            synced_close_item.inference_frame
-                            if synced_close_item.inference_frame is not None
-                            else close_frame
-                        )
                         close_vis = close_frame.copy()
 
                 # This whole if contains everything with homography association for helmet
-                if close_frame is not None and homography is not None:
+                if synced_close_item is not None and homography is not None:
                     close_result = model(
                         close_inference_frame,
                         conf=INFERENCE_CONFIG['conf'],
@@ -385,9 +384,6 @@ def main():
                             if projected is None:
                                 continue
                             wide_overlay_points.append((int(projected[0]), int(projected[1])))
-
-                            print("close_helmets:", len(close_helmets))
-                            print("proj:", projected, "frame:", frame.shape)
 
                         helmet_crops = associate_close_helmets_to_wide_helmet_tracks(
                             helmet_in_roi,

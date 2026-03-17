@@ -67,9 +67,8 @@ def map_close_point_to_wide_distorted(
     if undistorted is None:
         return None
 
-    print("Undistorted Coords: ", undistorted)
     distorted = distort_points([undistorted], img_shape=wide_img_shape)
-    print("Distorted Coords: ", distorted)
+
     return float(distorted[0, 0]), float(distorted[0, 1])
 
 
