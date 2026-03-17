@@ -78,6 +78,7 @@ def _capture_loop(cap: cv2.VideoCapture,
             stop_event.set()
             break
 
+        # Checks if image is above 1080p.
         frame = downscale_to_1080p(frame)
 
         i += 1

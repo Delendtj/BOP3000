@@ -5,12 +5,14 @@ from typing import Any
 import numpy as np
 import supervision as sv
 
+from functions.undistort import distort_points
+
 
 @dataclass(frozen=True)
 class Homography:
     matrix: np.ndarray
-    source_role: str = "wide"
-    target_role: str = "close"
+    source_role: str = "close"
+    target_role: str = "wide"
 
 
 def load_homography(path: str) -> Homography:
@@ -24,8 +26,8 @@ def load_homography(path: str) -> Homography:
     direction = payload.get("direction", {})
     return Homography(
         matrix=matrix,
-        source_role=str(direction.get("source_role", "wide")),
-        target_role=str(direction.get("target_role", "close")),
+        source_role=str(direction.get("source_role", "close")),
+        target_role=str(direction.get("target_role", "wide")),
     )
 
 
@@ -35,6 +37,40 @@ def project_point(homography: Homography, x: float, y: float) -> tuple[float, fl
     if projected[2] == 0:
         return None
     return float(projected[0] / projected[2]), float(projected[1] / projected[2])
+
+
+# This is no longer needed?
+def invert_homography(homography: Homography) -> Homography:
+    inv = np.linalg.inv(homography.matrix)
+    return Homography(
+        matrix=inv,
+        source_role=homography.target_role,
+        target_role=homography.source_role,
+    )
+
+def map_close_point_to_wide_distorted(
+    homography: Homography,
+    x: float,
+    y: float,
+    wide_img_shape,
+) -> tuple[float, float] | None:
+    """
+    Map a close-camera point into distorted wide-camera pixel space.
+    Assumes homography maps close -> wide (undistorted).
+    """
+    if homography.source_role != "close" or homography.target_role != "wide":
+        raise ValueError(
+            f"Expected homography close->wide, got {homography.source_role}->{homography.target_role}."
+        )
+
+    undistorted = project_point(homography, x, y)
+    if undistorted is None:
+        return None
+
+    print("Undistorted Coords: ", undistorted)
+    distorted = distort_points([undistorted], img_shape=wide_img_shape)
+    print("Distorted Coords: ", distorted)
+    return float(distorted[0, 0]), float(distorted[0, 1])
 
 
 def select_close_frame(buffer, target_ts: float, max_delta: float) -> Any | None:
@@ -69,13 +105,19 @@ def associate_close_helmets_to_wide_helmet_tracks(
     ):
         return []
 
+    if homography.source_role != "close" or homography.target_role != "wide":
+        raise ValueError(
+            f"Expected homography close->wide, got {homography.source_role}->{homography.target_role}."
+        )
+
+    inv_h = invert_homography(homography)
     candidate_pairs = []
     for wide_idx, wide_bbox in enumerate(wide_helmet_tracks.xyxy):
         track_id = int(wide_helmet_tracks.tracker_id[wide_idx])
         if track_id == -1:
             continue
 
-        projected = project_point(homography, *_bbox_center(wide_bbox))
+        projected = project_point(inv_h, *_bbox_center(wide_bbox))
         if projected is None:
             continue
 

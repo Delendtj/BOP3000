@@ -1,3 +1,5 @@
+import os
+import sys
 import argparse
 import json
 
@@ -5,6 +7,15 @@ import cv2
 import numpy as np
 
 from utilities.downscale_to_1080p import downscale_to_1080p
+
+from downscale_to_1080p import downscale_to_1080p
+
+# Allow running this script directly from the repo root.
+ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+if ROOT_DIR not in sys.path:
+    sys.path.insert(0, ROOT_DIR)
+
+from functions.undistort import undistort
 
 DISPLAY_MAX = (1280, 720)
 
@@ -73,6 +84,13 @@ def main():
 
     wide_frame = load_preview_frame(args.wide)
     close_frame = load_preview_frame(args.close)
+
+    # Downscale
+    wide_frame = downscale_to_1080p(wide_frame)
+    close_frame = downscale_to_1080p(close_frame)
+
+    # Undistorts the wide lens before setting points
+    wide_frame = undistort(wide_frame)
 
     wide_pts = collect_points("Wide", wide_frame)
     close_pts = collect_points("Close", close_frame)

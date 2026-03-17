@@ -18,7 +18,7 @@ from functions.Inference_roi import (
 from functions.homography import (
     associate_close_helmets_to_wide_helmet_tracks,
     load_homography,
-    project_point,
+    map_close_point_to_wide_distorted,
     select_close_frame,
 )
 from functions.ocr_worker import OCRWorker
@@ -40,14 +40,15 @@ config = {
     'IMGSZ': 1280,
 }
 
-DATA_PATH = "DJI_20260301122027_0001_D.MP4"
-CLOSE_SOURCE = "Canon_2026-03-01_12-20-29.mp4"
-CONF_THRESHOLD = 0.5
+WIDE_SOURCE = "../videos/DJI_1.MP4"
+CLOSE_SOURCE = "../videos/canon_1.mp4"
+CONF_THRESHOLD = 0.2
 FRAME_SKIP = 1
 OCR_VOTE = 3          # collect votes for N frames before deciding
 MAX_SYNC_DELTA = 0.05
 CLOSE_MATCH_MAX_DIST = 120
 HELMET_CLASS_ID = 0
+PERSON_CLASS_ID = 1
 SYNC_MISS_LOG_INTERVAL = 2.0
 HOMOGRAPHY_PATH = os.path.join("img", "homography.json")
 
@@ -132,21 +133,22 @@ def main():
     root.destroy()
 
     # Open video
-    preview_cap = cv2.VideoCapture(DATA_PATH)
+    preview_cap = cv2.VideoCapture(WIDE_SOURCE)
     fps = preview_cap.get(cv2.CAP_PROP_FPS)
-    ret, preview_frame = preview_cap.read()
+    wide_ret, preview_frame = preview_cap.read()
     preview_cap.release()
 
     preview_frame = downscale_to_1080p(preview_frame)
-    if not ret:
+    if not wide_ret:
         raise RuntimeError("Could not read initial frame for ROI.")
 
     close_preview_cap = cv2.VideoCapture(CLOSE_SOURCE)
     close_ret, close_preview_frame = close_preview_cap.read()
     close_preview_cap.release()
+
+    close_preview_frame = downscale_to_1080p(close_preview_frame)
     if not close_ret:
         raise RuntimeError("Could not read initial close frame for ROI.")
-    close_preview_frame = downscale_to_1080p(close_preview_frame)
 
     # ROI
     yolo_roi = load_roi(YOLO_ROI_PATH)
@@ -190,7 +192,7 @@ def main():
 
     # Initialize threads and processes
     pipeline = AsyncFramePipeline(
-        source=DATA_PATH,
+        source=WIDE_SOURCE,
         frame_skip=FRAME_SKIP,
         queue_size=3,
         inference_roi=yolo_roi,
@@ -257,6 +259,7 @@ def main():
                     paused = False
                 continue
 
+            # Read frames from close camera
             while True:
                 close_item = pipeline_close.read(timeout=0.01)
 
@@ -277,6 +280,7 @@ def main():
 
             frame_count += 1
 
+            # Maybe we only need detection for class 1 (people) here???
             result = model(
                 inference_frame,
                 conf=INFERENCE_CONFIG['conf'],
@@ -299,11 +303,16 @@ def main():
             # Extract better crop from helmet detections and give to worker queue
             synced_close_item = None
             if homography is not None:
+                close_frame = select_close_frame(close_buffer, item.ts, MAX_SYNC_DELTA)
+            # Fallback to latest frame in queue
+            if close_frame is None and len(close_buffer) > 0:
+                close_frame = close_buffer[-1][1]
                 synced_close_item = select_close_frame(close_buffer, item.ts, MAX_SYNC_DELTA)
 
             close_vis = None
             latest_close_frame = latest_close_item.frame if latest_close_item is not None else None
 
+            wide_overlay_points = []
             if ocr_roi is not None:
                 helmet_tracks = tracker.get_non_confirmed_helmet_tracks()
                 helmet_in_roi = keep_detections_inside_roi(helmet_tracks, ocr_roi)
@@ -329,42 +338,56 @@ def main():
                         )
                         close_vis = close_frame.copy()
 
-                        close_result = model(
-                            close_inference_frame,
-                            conf=INFERENCE_CONFIG['conf'],
-                            iou=INFERENCE_CONFIG['iou'],
-                            max_det=INFERENCE_CONFIG['max_det'],
-                            imgsz=INFERENCE_CONFIG['imgsz'],
-                            half=INFERENCE_CONFIG['half'],
-                            device=INFERENCE_CONFIG['device'],
-                            verbose=INFERENCE_CONFIG['verbose']
-                        )[0]
-                        close_detections = sv.Detections.from_ultralytics(close_result)
-                        close_detections = shift_detections_to_full_frame(
-                            close_detections,
-                            synced_close_item.inference_offset,
-                        )
-                        if close_yolo_roi is not None:
-                            close_detections = keep_detections_inside_roi(close_detections, close_yolo_roi)
-                        close_helmets = close_detections[close_detections.class_id == HELMET_CLASS_ID]
-                        if close_ocr_roi is not None:
-                            close_helmets = keep_detections_inside_roi(close_helmets, close_ocr_roi)
+                # This whole if contains everything with homography association for helmet
+                if close_frame is not None and homography is not None:
+                    close_result = model(
+                        close_inference_frame,
+                        conf=INFERENCE_CONFIG['conf'],
+                        iou=INFERENCE_CONFIG['iou'],
+                        max_det=INFERENCE_CONFIG['max_det'],
+                        imgsz=INFERENCE_CONFIG['imgsz'],
+                        half=INFERENCE_CONFIG['half'],
+                        device=INFERENCE_CONFIG['device'],
+                        verbose=INFERENCE_CONFIG['verbose'],
+                        classes=[0]
+                    )[0]
+                    close_detections = sv.Detections.from_ultralytics(close_result)
+                    close_detections = shift_detections_to_full_frame(
+                        close_detections,
+                        synced_close_item.inference_offset,
+                    )
+                    # Are we running close detection and then filtering out??!?!?
+                    # Maybe run model on cropped ROI?
+                    if close_yolo_roi is not None:
+                        close_detections = keep_detections_inside_roi(close_detections, close_yolo_roi)
+                    close_helmets = close_detections[close_detections.class_id == HELMET_CLASS_ID] # Get only helmets
+                    if close_ocr_roi is not None:
+                        close_helmets = keep_detections_inside_roi(close_helmets, close_ocr_roi)
 
-                        if len(close_helmets) > 0:
-                            for bbox in close_helmets.xyxy:
-                                x1, y1, x2, y2 = map(int, bbox)
-                                cv2.rectangle(close_vis, (x1, y1), (x2, y2), (0, 255, 255), 2)
+                    # Draw helmets on close frame
+                    if close_vis is not None and len(close_helmets) > 0:
+                        for bbox in close_helmets.xyxy:
+                            x1, y1, x2, y2 = map(int, bbox)
+                            cv2.rectangle(close_vis, (x1, y1), (x2, y2), (0, 0, 255), 2)
 
-                        if len(helmet_in_roi) > 0:
-                            for bbox in helmet_in_roi.xyxy:
-                                center_x = float((bbox[0] + bbox[2]) / 2.0)
-                                center_y = float((bbox[1] + bbox[3]) / 2.0)
-                                projected = project_point(homography, center_x, center_y)
-                                if projected is None:
-                                    continue
-                                px, py = int(projected[0]), int(projected[1])
-                                if 0 <= px < close_vis.shape[1] and 0 <= py < close_vis.shape[0]:
-                                    cv2.circle(close_vis, (px, py), 5, (0, 0, 255), -1)
+                    # Visualize homography on wide frame (project close -> wide).
+                    if len(close_helmets) > 0:
+                        for bbox in close_helmets.xyxy:
+                            cx = float((bbox[0] + bbox[2]) / 2.0)
+                            cy = float((bbox[1] + bbox[3]) / 2.0)
+
+                            projected = map_close_point_to_wide_distorted(
+                                homography,
+                                cx,
+                                cy,
+                                wide_img_shape=frame.shape,
+                            )
+                            if projected is None:
+                                continue
+                            wide_overlay_points.append((int(projected[0]), int(projected[1])))
+
+                            print("close_helmets:", len(close_helmets))
+                            print("proj:", projected, "frame:", frame.shape)
 
                         helmet_crops = associate_close_helmets_to_wide_helmet_tracks(
                             helmet_in_roi,
@@ -374,17 +397,25 @@ def main():
                             CLOSE_MATCH_MAX_DIST,
                         )
                 else:
+                    # OLD: Without homography
                     helmet_crops = extract_helmet_box(helmet_in_roi, frame)
 
+                # Give associated helmet crops to the ocr_worker
+                # This means if associate_close_helmet_crops() fails, nothing goes to the OCR
                 for h in helmet_crops:
                     ocr_worker.submit(h)
 
             # Evaluate if the detection is good enough to be set for tracks
             helmets_res = ocr_worker.drain_results()
-            tracker.check_for_ocr(helmets_res)
+            tracker.check_for_ocr(helmets_res) # Includes all voting logic.
 
             # Annotate frames
             annotated = tracker.annotate(frame)
+            if wide_overlay_points:
+                for px, py in wide_overlay_points:
+                    # print(0 <= px < annotated.shape[1] and 0 <= py < annotated.shape[0])
+                    if 0 <= px < annotated.shape[1] and 0 <= py < annotated.shape[0]:
+                        cv2.circle(annotated, (px, py), 10, (0, 0, 255), -1)
 
             if yolo_roi is not None:
                 cv2.polylines(
