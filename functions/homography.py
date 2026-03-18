@@ -109,6 +109,7 @@ def associate_close_helmets_to_wide_helmet_tracks(
             f"Expected homography close->wide, got {homography.source_role}->{homography.target_role}."
         )
 
+    # might need to remove this later
     inv_h = invert_homography(homography)
     candidate_pairs = []
     for wide_idx, wide_bbox in enumerate(wide_helmet_tracks.xyxy):

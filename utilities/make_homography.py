@@ -6,8 +6,6 @@ import json
 import cv2
 import numpy as np
 
-from utilities.downscale_to_1080p import downscale_to_1080p
-
 from downscale_to_1080p import downscale_to_1080p
 
 # Allow running this script directly from the repo root.
@@ -98,7 +96,8 @@ def main():
     if len(wide_pts) < 4 or len(close_pts) < 4:
         raise RuntimeError("Need at least four correspondences for a valid homography.")
 
-    H, _ = cv2.findHomography(wide_pts, close_pts, cv2.RANSAC, 5.0)
+    # Build homography in the direction expected at runtime: close -> wide.
+    H, _ = cv2.findHomography(close_pts, wide_pts, cv2.RANSAC, 5.0)
     if H is None:
         raise RuntimeError("Could not estimate a homography from the selected points.")
 
@@ -107,15 +106,15 @@ def main():
             {
                 "H": H.tolist(),
                 "direction": {
-                    "source_role": "wide",
-                    "target_role": "close",
+                    "source_role": "close",
+                    "target_role": "wide",
                 },
             },
             f,
             indent=2,
         )
 
-    print(f"Saved wide->close homography to {args.output}")
+    print(f"Saved close->wide homography to {args.output}")
 
 
 if __name__ == "__main__":

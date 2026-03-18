@@ -40,8 +40,8 @@ config = {
     'IMGSZ': 1280,
 }
 
-WIDE_SOURCE = "../videos/DJI_1.MP4"
-CLOSE_SOURCE = "../videos/canon_1.mp4"
+WIDE_SOURCE = "../videos/wide_cam.mp4"
+CLOSE_SOURCE = "../videos/close_cam.mp4"
 CONF_THRESHOLD = 0.2
 FRAME_SKIP = 1
 OCR_VOTE = 3          # collect votes for N frames before deciding
@@ -407,6 +407,8 @@ def main():
 
             # Annotate frames
             annotated = tracker.annotate(frame)
+
+            # Draw projected points for visualization
             if wide_overlay_points:
                 for px, py in wide_overlay_points:
                     # print(0 <= px < annotated.shape[1] and 0 <= py < annotated.shape[0])
