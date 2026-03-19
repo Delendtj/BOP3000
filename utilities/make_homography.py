@@ -17,6 +17,17 @@ from functions.undistort import undistort
 
 DISPLAY_MAX = (1280, 720)
 
+# Real-world rink coordinates (in feet or meters, your choice — just be consistent)
+# These are the known positions of markings on the rink
+world_points = np.array([
+    [0.0,   0.0],   # e.g. center ice dot
+    [25.0,  0.0],   # e.g. right blue line center
+    [-25.0, 0.0],   # e.g. left blue line center
+    [25.0,  22.0],  # e.g. right face-off dot
+    [25.0, -22.0],  # e.g. right face-off dot
+    [-25.0, 22.0],  # etc.
+    [-25.0, -22.0],
+], dtype=np.float32)
 
 def parse_args():
     parser = argparse.ArgumentParser(

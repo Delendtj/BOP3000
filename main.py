@@ -21,6 +21,10 @@ from functions.homography import (
     map_close_point_to_wide_distorted,
     select_close_frame,
 )
+from functions.close_association import (
+    bbox_top_center_xyxy,
+    match_close_helmets_to_people,
+)
 from functions.ocr_worker import OCRWorker
 from functions.roi import load_roi, roi_inside_roi, save_roi, select_roi
 from functions.tracker import Tracker
@@ -47,6 +51,8 @@ FRAME_SKIP = 1
 OCR_VOTE = 3          # collect votes for N frames before deciding
 MAX_SYNC_DELTA = 0.05
 CLOSE_MATCH_MAX_DIST = 120
+CLOSE_HELMET_PERSON_MAX_DIST = 80
+CLOSE_HELMET_PERSON_MAX_BELOW_RATIO = 0.08
 HELMET_CLASS_ID = 0
 PERSON_CLASS_ID = 1
 SYNC_MISS_LOG_INTERVAL = 2.0
@@ -121,7 +127,7 @@ def select_ocr_roi_inside_yolo(frame, yolo_roi):
             return None
         if roi_inside_roi(candidate, yolo_roi):
             return candidate
-        print("OCR ROI must be inside YOLO ROI. Draw again or press Esc to cancel.")
+    print("OCR ROI must be inside YOLO ROI. Draw again or press Esc to cancel.")
 
 
 def main():
@@ -348,7 +354,7 @@ def main():
                         half=INFERENCE_CONFIG['half'],
                         device=INFERENCE_CONFIG['device'],
                         verbose=INFERENCE_CONFIG['verbose'],
-                        classes=[0]
+                        classes=[HELMET_CLASS_ID, PERSON_CLASS_ID],
                     )[0]
                     close_detections = sv.Detections.from_ultralytics(close_result)
                     close_detections = shift_detections_to_full_frame(
@@ -360,6 +366,7 @@ def main():
                     if close_yolo_roi is not None:
                         close_detections = keep_detections_inside_roi(close_detections, close_yolo_roi)
                     close_helmets = close_detections[close_detections.class_id == HELMET_CLASS_ID] # Get only helmets
+                    close_people = close_detections[close_detections.class_id == PERSON_CLASS_ID] # Get only people
                     if close_ocr_roi is not None:
                         close_helmets = keep_detections_inside_roi(close_helmets, close_ocr_roi)
 
@@ -368,6 +375,32 @@ def main():
                         for bbox in close_helmets.xyxy:
                             x1, y1, x2, y2 = map(int, bbox)
                             cv2.rectangle(close_vis, (x1, y1), (x2, y2), (0, 0, 255), 2)
+
+                    # Draw people on close frame
+                    if close_vis is not None and len(close_people) > 0:
+                        for bbox in close_people.xyxy:
+                            x1, y1, x2, y2 = map(int, bbox)
+                            cv2.rectangle(close_vis, (x1, y1), (x2, y2), (255, 0, 0), 2)
+
+                    # Match helmets to people using top-center proximity.
+                    helmet_person_matches = match_close_helmets_to_people(
+                        close_helmets,
+                        close_people,
+                        max_dist=CLOSE_HELMET_PERSON_MAX_DIST,
+                        max_person_top_below_ratio=CLOSE_HELMET_PERSON_MAX_BELOW_RATIO,
+                    )
+                    # Visualize connection between people and helmet detections
+                    if close_vis is not None and helmet_person_matches:
+                        for helmet_idx, person_idx, _ in helmet_person_matches:
+                            hx, hy = bbox_top_center_xyxy(close_helmets.xyxy[helmet_idx])
+                            px, py = bbox_top_center_xyxy(close_people.xyxy[person_idx])
+                            cv2.line(
+                                close_vis,
+                                (int(hx), int(hy)),
+                                (int(px), int(py)),
+                                (0, 255, 0),
+                                2,
+                            )
 
                     # Visualize homography on wide frame (project close -> wide).
                     if len(close_helmets) > 0:
