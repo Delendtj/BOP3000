@@ -329,7 +329,7 @@ def main():
         if wide_pts is None or len(wide_pts) != len(WORLD_POINTS):
             raise RuntimeError("Wide point collection canceled or incomplete.")
 
-        wide_H, _ = cv2.findHomography(wide_pts, WORLD_POINTS, cv2.RANSAC, 5.0)
+        wide_H, _ = cv2.findHomography(wide_pts, WORLD_POINTS, cv2.RANSAC, 0.5)
         if wide_H is None:
             raise RuntimeError("Could not estimate wide->rink homography.")
 
@@ -366,7 +366,7 @@ def main():
         if close_pts is None or len(close_pts) != len(WORLD_POINTS):
             raise RuntimeError("Close point collection canceled or incomplete.")
 
-        close_H, _ = cv2.findHomography(close_pts, WORLD_POINTS, cv2.RANSAC, 5.0)
+        close_H, _ = cv2.findHomography(close_pts, WORLD_POINTS, cv2.RANSAC, 0.5)
         if close_H is None:
             raise RuntimeError("Could not estimate close->rink homography.")
 

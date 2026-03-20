@@ -13,7 +13,7 @@ class SharedMemoryRing:
     This buffer is a fixed size calculated based on expected image size and data type of the object.
 
     A limitation is that it overwrites slots in memory because it doesn't track if workers are currently
-    working with current slot. This should however be fine, especially if we cap frames.
+    working with current slot. This should however be fine, especially if we cap frames. e.g 30/60fps
     """
     def __init__(
         self,

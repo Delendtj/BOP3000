@@ -43,13 +43,16 @@ def rink_to_canvas(
 def build_rink_canvas(
     bounds: tuple[float, float, float, float],
     canvas_size: tuple[int, int],
-    line_color=(200, 200, 200),
+    line_color=(0, 0, 0),
+    bg_color=(255, 255, 255),
     draw_center_line: bool = False,
+    draw_center_circle: bool = True,
+    center_circle_radius: float = 4.5,
     horizontal: bool = False,
     red_lines: tuple[float, ...] = (),
 ) -> np.ndarray:
     w, h = canvas_size
-    canvas = np.zeros((h, w, 3), dtype=np.uint8)
+    canvas = np.full((h, w, 3), bg_color, dtype=np.uint8)
     # Rink border
     cvx1, cvy1 = rink_to_canvas(bounds[0], bounds[2], bounds, canvas_size, horizontal=horizontal)
     cvx2, cvy2 = rink_to_canvas(bounds[1], bounds[3], bounds, canvas_size, horizontal=horizontal)
@@ -64,6 +67,14 @@ def build_rink_canvas(
         cx, cy_top = rink_to_canvas(0.0, bounds[3], bounds, canvas_size, horizontal=horizontal)
         _, cy_bot = rink_to_canvas(0.0, bounds[2], bounds, canvas_size, horizontal=horizontal)
         canvas[min(cy_top, cy_bot):max(cy_top, cy_bot), cx] = line_color
+
+    # Center circle (optional)
+    if draw_center_circle and center_circle_radius > 0:
+        cx, cy = rink_to_canvas(0.0, 0.0, bounds, canvas_size, horizontal=horizontal)
+        rx, ry = rink_to_canvas(center_circle_radius, 0.0, bounds, canvas_size, horizontal=horizontal)
+        radius_px = int(((rx - cx) ** 2 + (ry - cy) ** 2) ** 0.5)
+        if radius_px > 0:
+            cv2.circle(canvas, (cx, cy), radius_px, line_color, 2)
 
     # Red lines at fixed rink y positions (e.g., center and goal lines).
     for y in red_lines:
