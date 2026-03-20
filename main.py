@@ -25,6 +25,11 @@ from functions.close_association import (
     bbox_top_center_xyxy,
     match_close_helmets_to_people,
 )
+from functions.rink_projection import (
+    build_rink_canvas,
+    project_to_rink,
+    rink_to_canvas,
+)
 from functions.ocr_worker import OCRWorker
 from functions.roi import load_roi, roi_inside_roi, save_roi, select_roi
 from functions.tracker import Tracker
@@ -57,6 +62,8 @@ HELMET_CLASS_ID = 0
 PERSON_CLASS_ID = 1
 SYNC_MISS_LOG_INTERVAL = 2.0
 HOMOGRAPHY_PATH = os.path.join("img", "homography.json")
+RINK_WIDE_H_PATH = os.path.join("img", "homography_wide.json")
+RINK_CLOSE_H_PATH = os.path.join("img", "homography_close.json")
 
 INFERENCE_CONFIG = {
     'conf': CONF_THRESHOLD,
@@ -73,6 +80,12 @@ OCR_ROI_PATH = os.path.join("img", "ocr_roi.json")
 CLOSE_YOLO_ROI_PATH = os.path.join("img", "close_yolo_roi.json")
 CLOSE_OCR_ROI_PATH = os.path.join("img", "close_ocr_roi.json")
 DISPLAY_PANEL_SIZE = (960, 540)
+# Horizontal rink view (length along width).
+RINK_CANVAS_SIZE = (1200, 600)
+# IIHF 60m x 30m rink -> half-extents: x in [-15, 15], y in [-30, 30]
+RINK_BOUNDS = (-15.0, 15.0, -30.0, 30.0)
+RINK_GOAL_LINE_OFFSET = 26.0
+RINK_RED_LINES = (0.0, -RINK_GOAL_LINE_OFFSET, RINK_GOAL_LINE_OFFSET)
 
 
 def build_display_panel(frame, title, panel_size, subtitle=None):
@@ -230,6 +243,28 @@ def main():
         homography = None
         print("Homography missing, cross-camera crops disabled.")
 
+    try:
+        wide_rink_h = load_homography(RINK_WIDE_H_PATH)
+        if wide_rink_h.source_role != "wide" or wide_rink_h.target_role != "rink":
+            raise RuntimeError(
+                f"Wide rink homography must map wide -> rink, got {wide_rink_h.source_role} -> {wide_rink_h.target_role}."
+            )
+        print("Loaded wide->rink homography.")
+    except FileNotFoundError:
+        wide_rink_h = None
+        print("Wide rink homography missing, rink view will omit wide points.")
+
+    try:
+        close_rink_h = load_homography(RINK_CLOSE_H_PATH)
+        if close_rink_h.source_role != "close" or close_rink_h.target_role != "rink":
+            raise RuntimeError(
+                f"Close rink homography must map close -> rink, got {close_rink_h.source_role} -> {close_rink_h.target_role}."
+            )
+        print("Loaded close->rink homography.")
+    except FileNotFoundError:
+        close_rink_h = None
+        print("Close rink homography missing, rink view will omit close points.")
+
     # Section for initializing benchmark classes here:
     ocr_bench = OCRThroughputStats(log_every_sec=2.0)
 
@@ -324,6 +359,7 @@ def main():
             latest_close_frame = latest_close_item.frame if latest_close_item is not None else None
 
             wide_overlay_points = []
+            close_people = None
             if ocr_roi is not None:
                 helmet_tracks = tracker.get_non_confirmed_helmet_tracks()
                 helmet_in_roi = keep_detections_inside_roi(helmet_tracks, ocr_roi)
@@ -447,6 +483,52 @@ def main():
                     # print(0 <= px < annotated.shape[1] and 0 <= py < annotated.shape[0])
                     if 0 <= px < annotated.shape[1] and 0 <= py < annotated.shape[0]:
                         cv2.circle(annotated, (px, py), 10, (0, 0, 255), -1)
+
+            # Rink-space view (project wide + close points into rink coords)
+            if wide_rink_h is not None or close_rink_h is not None:
+                rink_canvas = build_rink_canvas(
+                    RINK_BOUNDS,
+                    RINK_CANVAS_SIZE,
+                    draw_center_line=False,
+                    horizontal=True,
+                    red_lines=RINK_RED_LINES,
+                )
+
+                if wide_rink_h is not None and len(tracker.people_tracks) > 0:
+                    for bbox in tracker.people_tracks.xyxy:
+                        cx = float((bbox[0] + bbox[2]) / 2.0)
+                        cy = float(bbox[3])
+                        rink_pt = project_to_rink(wide_rink_h, cx, cy)
+                        if rink_pt is None:
+                            continue
+                        rx, ry = rink_to_canvas(
+                            rink_pt[0],
+                            rink_pt[1],
+                            RINK_BOUNDS,
+                            RINK_CANVAS_SIZE,
+                            horizontal=True,
+                        )
+                        if 0 <= rx < rink_canvas.shape[1] and 0 <= ry < rink_canvas.shape[0]:
+                            cv2.circle(rink_canvas, (rx, ry), 5, (0, 0, 255), -1)
+
+                if close_rink_h is not None and close_people is not None and len(close_people) > 0:
+                    for bbox in close_people.xyxy:
+                        cx = float((bbox[0] + bbox[2]) / 2.0)
+                        cy = float(bbox[3])
+                        rink_pt = project_to_rink(close_rink_h, cx, cy)
+                        if rink_pt is None:
+                            continue
+                        rx, ry = rink_to_canvas(
+                            rink_pt[0],
+                            rink_pt[1],
+                            RINK_BOUNDS,
+                            RINK_CANVAS_SIZE,
+                            horizontal=True,
+                        )
+                        if 0 <= rx < rink_canvas.shape[1] and 0 <= ry < rink_canvas.shape[0]:
+                            cv2.circle(rink_canvas, (rx, ry), 5, (255, 0, 0), -1)
+
+                cv2.imshow("Rink view", rink_canvas)
 
             if yolo_roi is not None:
                 cv2.polylines(
