@@ -16,5 +16,7 @@ Dataen kan leveres videre til systemer som viser tider på storskjerm. Dette er 
 Oppgaven blir å finne kameraer som fungerer å bruke i ishaller, identifisere og trene modeller og sy dette sammen til et system som utfører oppgaven
 
 
+Keybinds
 YOLO ROI = r
 OCR ROI = o
+Finish line = f

@@ -5,15 +5,18 @@ os.environ["PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK"] = "True"
 os.environ["PADDLE_PDX_ENABLE_MKLDNN_BYDEFAULT"] = "0"
 os.environ["FLAGS_use_mkldnn"] = "0"
 os.environ["FLAGS_enable_pir_in_executor"] = "0"
+os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
 
 from paddleocr import PaddleOCR
 
 # Threshold, vi upscaler alt under dette
 UPSCALE_THRESH = 60
+_i = 0
 
 _ocr = PaddleOCR(
     text_detection_model_name="PP-OCRv5_mobile_det",
     text_recognition_model_name="PP-OCRv5_mobile_rec",
+    # use_gpu=False,
     use_doc_orientation_classify=False,
     use_doc_unwarping=False,
     use_textline_orientation=False,
@@ -31,17 +34,12 @@ def register_helmet(helmets, debug=False):
     for helmet in helmets:
         img   = helmet['image']   # numpy array (BGR crop)
         bbox  = helmet['bbox']
-        conf  = helmet['conf']
         tid = helmet['track_id']
 
-        if tid == -1: continue
+        if tid == -1:
+            continue
 
         processed_img = preprocess_image(img, debug=debug)
-
-        if debug:
-            print("Running OCR...")
-            print("Input shape: ", img.shape)
-            print("Input shape after processing: ", img.shape)
 
         raw = _ocr.predict(processed_img)
 
@@ -70,17 +68,16 @@ def register_helmet(helmets, debug=False):
                 valid_texts.append(digits)
                 valid_confs.append(float(score))
 
-
-
         if valid_texts:
             number_str = "".join(valid_texts).strip()
             ocr_conf = (sum(valid_confs) / len(valid_confs)) * 100.0
             # Show image if it valid
             if debug:
                 print("Number accepted was: ", number_str, " for track_id: ", tid)
-                cv2.imshow("Valid Image", processed_img)
-                cv2.waitKey(0)
-                cv2.destroyAllWindows()
+                if _saved_im_counter > 32: _saved_im_counter = 0
+                _saved_im_counter += 1
+                cv2.imwrite(f"output/helmet{_saved_im_counter}.png", processed_img)
+
 
         if debug:
             print(f"PaddleOCR raw text: {number_str!r}  conf: {ocr_conf:.1f}%")
@@ -96,6 +93,15 @@ def register_helmet(helmets, debug=False):
 
 # Preprocessing av input
 def preprocess_image(image, debug=False):
+    """
+    Process cropped image and return it
+
+    Preprocessing overview:
+    - Grayscale the image
+    - Upscale if image is less than UPSCALE_THRESH
+    - Make the image sharper making a blurred copy and then subtracting it from original image
+    - Convert back to BGR
+    """
 
     # Konverter til GrayScale
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
@@ -120,9 +126,9 @@ def preprocess_image(image, debug=False):
     output = cv2.cvtColor(sharpened, cv2.COLOR_GRAY2BGR)
 
     # Vis fram for debugging
-    #if debug:
-    #    cv2.imshow("image", output)
-    #    cv2.waitKey(0)
-    #    cv2.destroyAllWindows()
+    if debug:
+        cv2.imshow("image", output)
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
 
     return output
