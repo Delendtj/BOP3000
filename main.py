@@ -28,15 +28,18 @@ from functions.association import (
 from functions.close_inference import run_close_inference
 from functions.rink_projection import (
     build_rink_canvas,
-    project_to_rink,
-    rink_to_canvas,
+    project_bboxes_to_rink_canvas,
 )
 from functions.ocr_worker import OCRWorker
 from functions.assignment import hungarian_assign
 from functions.roi import load_roi, roi_inside_roi, save_roi, select_roi
 from functions.tracker import Tracker
-from functions.undistort import undistort_points
-from functions.visualization import draw_bboxes, draw_match_lines
+from functions.visualization import (
+    draw_bboxes,
+    draw_match_lines,
+    draw_rink_match_lines,
+    draw_rink_points,
+)
 from hardware_detector import HardwareDetector
 from pipeline.async_pipeline import AsyncFramePipeline
 from utilities.benchmark import OCRThroughputStats
@@ -335,7 +338,8 @@ def main():
                 imgsz=INFERENCE_CONFIG['imgsz'],
                 half=INFERENCE_CONFIG['half'],
                 device=INFERENCE_CONFIG['device'],
-                verbose=INFERENCE_CONFIG['verbose']
+                verbose=INFERENCE_CONFIG['verbose'],
+                classes=[PERSON_CLASS_ID]
             )[0]
 
             detections = sv.Detections.from_ultralytics(result)
@@ -476,78 +480,46 @@ def main():
                     red_lines=RINK_RED_LINES,
                 )
 
-                def map_rink_xy(rink_pt):
-                    # Current calibration: swap axes only.
-                    rink_x, rink_y = rink_pt
-                    return rink_y, rink_x
+                wide_rink_points = project_bboxes_to_rink_canvas(
+                    tracker.people_tracks.xyxy if len(tracker.people_tracks) > 0 else None,
+                    wide_rink_h,
+                    RINK_BOUNDS,
+                    RINK_CANVAS_SIZE,
+                    horizontal=True,
+                    undistort=True,
+                    img_shape=frame.shape,
+                )
+                close_rink_points = project_bboxes_to_rink_canvas(
+                    close_people.xyxy if close_people is not None and len(close_people) > 0 else None,
+                    close_rink_h,
+                    RINK_BOUNDS,
+                    RINK_CANVAS_SIZE,
+                    horizontal=True,
+                )
 
-                # Projecting wide cam points (red)
-                wide_rink_points = []
-                if wide_rink_h is not None and len(tracker.people_tracks) > 0:
-                    for bbox in tracker.people_tracks.xyxy:
-                        # Bottom center
-                        cx = float((bbox[0] + bbox[2]) / 2.0)
-                        cy = float(bbox[3])
-
-                        undist = undistort_points([(cx, cy)], img_shape=frame.shape)
-                        if undist is None or len(undist) == 0:
-                            continue
-                        undist_x, undist_y = undist[0]
-
-                        # Project coords from wide cam into the rink coordinates.
-                        rink_pt = project_to_rink(wide_rink_h, undist_x, undist_y)
-
-                        if rink_pt is None:
-                            continue
-                        rink_x, rink_y = map_rink_xy(rink_pt)
-                        rx, ry = rink_to_canvas(
-                            rink_x,
-                            rink_y,
-                            RINK_BOUNDS,
-                            RINK_CANVAS_SIZE,
-                            horizontal=True,
-                        )
-                        wide_rink_points.append(((rink_x, rink_y), (rx, ry)))
-
-                        # Draw the projected points into rink window (
-                        if 0 <= rx < rink_canvas.shape[1] and 0 <= ry < rink_canvas.shape[0]:
-                            cv2.circle(rink_canvas, (rx, ry), 5, (0, 0, 255), -1)
-
-                # Projecting close cam points (blue)
-                close_rink_points = []
-                if close_rink_h is not None and close_people is not None and len(close_people) > 0:
-                    for bbox in close_people.xyxy:
-                        # Bottom center
-                        cx = float((bbox[0] + bbox[2]) / 2.0)
-                        cy = float(bbox[3])
-
-                        # Project coords from close cam into the rink coordinates. (red)
-                        rink_pt = project_to_rink(close_rink_h, cx, cy)
-                        if rink_pt is None:
-                            continue
-                        rink_x, rink_y = map_rink_xy(rink_pt)
-                        rx, ry = rink_to_canvas(
-                            rink_x,
-                            rink_y,
-                            RINK_BOUNDS,
-                            RINK_CANVAS_SIZE,
-                            horizontal=True,
-                        )
-                        close_rink_points.append(((rink_x, rink_y), (rx, ry)))
-
-                        # Draw the projected points into rink window. (blue)
-                        if 0 <= rx < rink_canvas.shape[1] and 0 <= ry < rink_canvas.shape[0]:
-                            cv2.circle(rink_canvas, (rx, ry), 5, (255, 0, 0), -1)
+                draw_rink_points(
+                    rink_canvas,
+                    [canvas_xy for _, canvas_xy in wide_rink_points],
+                    color=(0, 0, 255),
+                )
+                draw_rink_points(
+                    rink_canvas,
+                    [canvas_xy for _, canvas_xy in close_rink_points],
+                    color=(255, 0, 0),
+                )
 
                 # Draw connections between projected points from both cameras.
                 if wide_rink_points and close_rink_points:
                     wide_xy = [p[0] for p in wide_rink_points]
                     close_xy = [p[0] for p in close_rink_points]
                     matches = hungarian_assign(wide_xy, close_xy, max_dist=RINK_MATCH_MAX_DIST)
-                    for wi, ci, _ in matches:
-                        wx, wy = wide_rink_points[wi][1]
-                        cx, cy = close_rink_points[ci][1]
-                        cv2.line(rink_canvas, (wx, wy), (cx, cy), (0, 200, 0), 2)
+                    draw_rink_match_lines(
+                        rink_canvas,
+                        matches,
+                        [canvas_xy for _, canvas_xy in wide_rink_points],
+                        [canvas_xy for _, canvas_xy in close_rink_points],
+                        color=(0, 200, 0),
+                    )
 
                 cv2.imshow("Rink view", rink_canvas)
 

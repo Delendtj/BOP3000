@@ -4,10 +4,6 @@ import numpy as np
 import supervision as sv
 from trackers import ByteTrackTracker
 
-# from functions.BBExtractor import extract_helmet_box
-# from functions.register_helmet import register_helmet
-# from functions.roi import bbox_center_in_roi
-
 
 class Tracker:
     def __init__(self, ocr_votes_count, conf_threshold, roi, frame_rate=30.0):
@@ -32,7 +28,6 @@ class Tracker:
         self.people_tracks = sv.Detections.empty()
         self.helmet_tracks = sv.Detections.empty()
 
-        self.processed_tracker_ids = set()
         self.ocr_runs = defaultdict(lambda: {"runs": 0, "cooldown": 0, "votes": []})
         self.helmet_numbers_final = {}
 
@@ -135,8 +130,6 @@ class Tracker:
                 idxs = np.where(mask)[0]
                 if len(idxs) > 0:
                     self.helmet_tracks.data["helmet_number"][idxs[0]] = final_number
-
-                self.processed_tracker_ids.add(tid)
 
 
     def annotate(self, frame):

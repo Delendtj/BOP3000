@@ -32,17 +32,23 @@ def match_close_helmets_to_people(
         return []
 
     candidate_pairs = []
+
+    # For each close_helmet we go through each close_people
+    # to compare top center of each.
     for helmet_idx, helmet_bbox in enumerate(close_helmets.xyxy):
         helmet_top = bbox_top_center_xyxy(helmet_bbox)
         for person_idx, person_bbox in enumerate(close_people.xyxy):
             person_top = bbox_top_center_xyxy(person_bbox)
             if max_person_top_below_ratio is not None:
-                person_h = person_bbox[3] - person_bbox[1]
+                person_h = person_bbox[3] - person_bbox[1] # Height
+                # If the persons center top is lower than the helmet top + threshold
+                # Then drop it
                 if person_h > 0 and person_top[1] > helmet_top[1] + max_person_top_below_ratio * person_h:
                     continue
+
             dx = helmet_top[0] - person_top[0]
             dy = helmet_top[1] - person_top[1]
-            dist = float((dx * dx + dy * dy) ** 0.5)
+            dist = float((dx * dx + dy * dy) ** 0.5) # Distance by pythagoras
 
             # If distance between both center tops are outside max_distance and helmet is not inside person bbox
             # Then we ignore it.
@@ -51,12 +57,19 @@ def match_close_helmets_to_people(
             # Else, we make a connection between them.
             candidate_pairs.append((dist, helmet_idx, person_idx))
 
+    # Sort in this order:
+    # distance      item[0]
+    # helmet_idx    item[1]
+    # person_idx    item[2]
     candidate_pairs.sort(key=lambda item: (item[0], item[1], item[2]))
 
     assigned_helmets = set()
     assigned_people = set()
     matches = []
 
+    # Greedy assignment
+    # First free person and free helmet is assigned based on sorted candidate_pairs
+    # These pairs cannot be used again.
     for dist, helmet_idx, person_idx in candidate_pairs:
         if helmet_idx in assigned_helmets or person_idx in assigned_people:
             continue
