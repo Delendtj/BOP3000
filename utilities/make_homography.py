@@ -25,14 +25,17 @@ RINK_POINTS = [
     ("right center circle", (4.5, 0.0)),
     ("top center circle", (0.0, 4.5)),
     ("bottom center circle", (0.0, -4.5)),
+
     # Red center line intersections with boards
     ("red line, top board", (0.0, 15.0)),
     ("red line, bottom board", (0.0, -15.0)),
+
     # Blue line intersections with boards/walls
     ("left blue line, top board", (-7.5, 15.0)),
     #("left blue line, bottom board", (-7.5, -15.0)),
     ("right blue line, top board", (7.5, 15.0)),
     #("right blue line, bottom board", (7.5, -15.0)),
+
     # Blue line center ice (middle of rink width)
     ("left blue line, center", (-7.5, 0.0)),
     ("right blue line, center", (7.5, 0.0)),

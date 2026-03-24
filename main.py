@@ -21,10 +21,11 @@ from functions.homography import (
     map_close_point_to_wide_distorted,
     select_close_frame,
 )
-from functions.close_association import (
+from functions.association import (
     bbox_top_center_xyxy,
     match_close_helmets_to_people,
 )
+from functions.close_inference import run_close_inference
 from functions.rink_projection import (
     build_rink_canvas,
     project_to_rink,
@@ -35,6 +36,7 @@ from functions.assignment import hungarian_assign
 from functions.roi import load_roi, roi_inside_roi, save_roi, select_roi
 from functions.tracker import Tracker
 from functions.undistort import undistort_points
+from functions.visualization import draw_bboxes, draw_match_lines
 from hardware_detector import HardwareDetector
 from pipeline.async_pipeline import AsyncFramePipeline
 from utilities.benchmark import OCRThroughputStats
@@ -379,67 +381,42 @@ def main():
                                     f"(misses={close_sync_misses})"
                                 )
                                 last_close_sync_log = now
-                    else:
-                        close_vis = close_frame.copy()
 
                 # This whole if contains everything with homography association for helmet
                 if synced_close_item is not None and homography is not None:
-                    close_result = model(
-                        close_inference_frame,
-                        conf=INFERENCE_CONFIG['conf'],
-                        iou=INFERENCE_CONFIG['iou'],
-                        max_det=INFERENCE_CONFIG['max_det'],
-                        imgsz=INFERENCE_CONFIG['imgsz'],
-                        half=INFERENCE_CONFIG['half'],
-                        device=INFERENCE_CONFIG['device'],
-                        verbose=INFERENCE_CONFIG['verbose'],
-                        classes=[HELMET_CLASS_ID, PERSON_CLASS_ID],
-                    )[0]
-                    close_detections = sv.Detections.from_ultralytics(close_result)
-                    close_detections = shift_detections_to_full_frame(
-                        close_detections,
-                        synced_close_item.inference_offset,
+                    close_out = run_close_inference(
+                        model=model,
+                        frame_item=synced_close_item,
+                        inference_config=INFERENCE_CONFIG,
+                        helmet_class_id=HELMET_CLASS_ID,
+                        person_class_id=PERSON_CLASS_ID,
+                        yolo_roi=close_yolo_roi,
+                        ocr_roi=close_ocr_roi,
                     )
-                    # Are we running close detection and then filtering out??!?!?
-                    # Maybe run model on cropped ROI?
-                    if close_yolo_roi is not None:
-                        close_detections = keep_detections_inside_roi(close_detections, close_yolo_roi)
-                    close_helmets = close_detections[close_detections.class_id == HELMET_CLASS_ID] # Get only helmets
-                    close_people = close_detections[close_detections.class_id == PERSON_CLASS_ID] # Get only people
-                    if close_ocr_roi is not None:
-                        close_helmets = keep_detections_inside_roi(close_helmets, close_ocr_roi)
+                    close_helmets = close_out.helmets
+                    close_people = close_out.people
 
-                    # Draw helmets on close frame
-                    if close_vis is not None and len(close_helmets) > 0:
-                        for bbox in close_helmets.xyxy:
-                            x1, y1, x2, y2 = map(int, bbox)
-                            cv2.rectangle(close_vis, (x1, y1), (x2, y2), (0, 0, 255), 2)
+                    close_vis = close_frame.copy()
 
-                    # Draw people on close frame
-                    if close_vis is not None and len(close_people) > 0:
-                        for bbox in close_people.xyxy:
-                            x1, y1, x2, y2 = map(int, bbox)
-                            cv2.rectangle(close_vis, (x1, y1), (x2, y2), (255, 0, 0), 2)
+                    draw_bboxes(close_vis, close_helmets, (0, 0, 255), thickness=2)
+                    draw_bboxes(close_vis, close_people, (255, 0, 0), thickness=2)
 
-                    # Match helmets to people using top-center proximity.
                     helmet_person_matches = match_close_helmets_to_people(
                         close_helmets,
                         close_people,
                         max_dist=CLOSE_HELMET_PERSON_MAX_DIST,
                         max_person_top_below_ratio=CLOSE_HELMET_PERSON_MAX_BELOW_RATIO,
                     )
-                    # Visualize connection between people and helmet detections
-                    if close_vis is not None and helmet_person_matches:
-                        for helmet_idx, person_idx, _ in helmet_person_matches:
-                            hx, hy = bbox_top_center_xyxy(close_helmets.xyxy[helmet_idx])
-                            px, py = bbox_top_center_xyxy(close_people.xyxy[person_idx])
-                            cv2.line(
-                                close_vis,
-                                (int(hx), int(hy)),
-                                (int(px), int(py)),
-                                (0, 255, 0),
-                                2,
-                            )
+                    draw_match_lines(
+                        close_vis,
+                        close_helmets,
+                        close_people,
+                        helmet_person_matches,
+                        bbox_top_center_xyxy,
+                        bbox_top_center_xyxy,
+                        (0, 255, 0),
+                        thickness=2,
+                    )
 
                     # Visualize homography on wide frame (project close -> wide).
                     if len(close_helmets) > 0:
@@ -465,7 +442,7 @@ def main():
                             CLOSE_MATCH_MAX_DIST,
                         )
                 else:
-                    # OLD: Without homography
+                    # OLD: Without homography           [FIND A WAY TO GET RID OF THIS]
                     helmet_crops = extract_helmet_box(helmet_in_roi, frame)
 
                 # Give associated helmet crops to the ocr_worker

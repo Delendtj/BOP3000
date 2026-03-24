@@ -2,7 +2,7 @@ from collections import Counter, defaultdict
 
 import numpy as np
 import supervision as sv
-from trackers import ByteTrackTracker, OCSORTTracker
+from trackers import ByteTrackTracker
 
 # from functions.BBExtractor import extract_helmet_box
 # from functions.register_helmet import register_helmet
@@ -14,11 +14,11 @@ class Tracker:
         self.frame_rate = float(frame_rate) if float(frame_rate) > 0 else 30.0
 
         # Tuned ByteTrack settings for steadier helmet/person IDs.
-        self.tracker_people = OCSORTTracker(
+        self.tracker_people = ByteTrackTracker(
             lost_track_buffer=90,
             frame_rate=self.frame_rate,
         )
-        self.tracker_helmet = OCSORTTracker(
+        self.tracker_helmet = ByteTrackTracker(
             lost_track_buffer=90,
             frame_rate=self.frame_rate,
             #track_activation_threshold=0.35,

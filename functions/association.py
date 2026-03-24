@@ -7,7 +7,7 @@ def bbox_top_center_xyxy(bbox):
     return (x1 + x2) / 2.0, y1
 
 
-def point_in_bbox(point, bbox):
+def point_inside_bbox(point, bbox):
     px, py = point
     x1, y1, x2, y2 = bbox
     return x1 <= px <= x2 and y1 <= py <= y2
@@ -19,6 +19,10 @@ def match_close_helmets_to_people(
     max_dist: float,
     max_person_top_below_ratio: float | None = None,
 ):
+    """
+    Matches the top centers of a helmets with the top centers of people bboxes to associate helmet number (ID)
+    This is necessary to later associate people bboxes across screens.
+    """
     if (
         close_helmets is None
         or close_people is None
@@ -39,8 +43,12 @@ def match_close_helmets_to_people(
             dx = helmet_top[0] - person_top[0]
             dy = helmet_top[1] - person_top[1]
             dist = float((dx * dx + dy * dy) ** 0.5)
-            if dist > max_dist and not point_in_bbox(helmet_top, person_bbox):
+
+            # If distance between both center tops are outside max_distance and helmet is not inside person bbox
+            # Then we ignore it.
+            if dist > max_dist and not point_inside_bbox(helmet_top, person_bbox):
                 continue
+            # Else, we make a connection between them.
             candidate_pairs.append((dist, helmet_idx, person_idx))
 
     candidate_pairs.sort(key=lambda item: (item[0], item[1], item[2]))
