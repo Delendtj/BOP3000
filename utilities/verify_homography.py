@@ -11,7 +11,7 @@ ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
-from functions.undistort import undistort
+from functions.spatial.undistort import undistort
 from utilities.downscale_to_1080p import downscale_to_1080p
 from utilities.make_homography import RINK_POINTS, WORLD_POINTS
 

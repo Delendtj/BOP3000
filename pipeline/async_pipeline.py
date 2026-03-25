@@ -5,7 +5,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Optional
 
-from functions.Inference_roi import crop_frame_to_roi
+from functions.detection.roi_inference import crop_frame_to_roi
 from utilities.downscale_to_1080p import downscale_to_1080p
 
 

@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 import supervision as sv
 
-from functions.Inference_roi import keep_detections_inside_roi, shift_detections_to_full_frame
+from functions.detection.roi_inference import keep_detections_inside_roi, shift_detections_to_full_frame
 
 
 @dataclass

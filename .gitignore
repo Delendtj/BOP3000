@@ -6,8 +6,8 @@ models/tensor_engine.engine
 test_digit_crop.pt
 /models/1280.engine
 /models/1280.onnx
-.__pycache__/
 __pycache__/
-*.pycgit
+**/__pycache__/
+*.pyc
 *.pyo
 output/*

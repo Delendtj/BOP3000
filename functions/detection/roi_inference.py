@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 import supervision as sv
 
-from functions.roi import bbox_center_in_roi
+from functions.spatial.roi import bbox_center_in_roi
 
 
 def crop_frame_to_roi(frame, roi, padding=0):

@@ -22,6 +22,9 @@ _ocr = PaddleOCR(
     use_textline_orientation=False,
 )
 
+################################################
+# This whole file needs to renamed and revised #
+################################################
 def register_helmet(helmets, debug=False):
     """
     Process a list of helmet dicts (from BBExtractor) and return OCR results.

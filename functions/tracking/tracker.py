@@ -4,7 +4,7 @@ from math import hypot
 
 import numpy as np
 import supervision as sv
-from functions.lap_counter import LapCounter
+from functions.tracking.lap_counter import LapCounter
 from trackers import ByteTrackTracker
 
 

@@ -5,7 +5,7 @@ from typing import Any, Dict, List, Optional
 
 import numpy as np
 
-from functions.shm_ring import SharedMemoryRing
+from functions.system.shm_ring import SharedMemoryRing
 
 
 _STOP = "__STOP__"
@@ -58,7 +58,7 @@ def _ocr_process_main(
 
     Currently, it has a lot of room for silent errors and returning empty images.
     """
-    from functions.register_helmet import register_helmet
+    from functions.ocr.register_helmet import register_helmet
 
     # We already make a shared memory in start()
     # We then connect to that same memory space by having create=False and correct name=

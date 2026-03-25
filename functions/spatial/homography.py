@@ -5,7 +5,7 @@ from typing import Any
 import numpy as np
 import supervision as sv
 
-from functions.undistort import distort_points
+from functions.spatial.undistort import distort_points
 
 
 @dataclass(frozen=True)

@@ -1,6 +1,6 @@
 import subprocess
 from ultralytics import YOLO
-from functions.tensor_loader import init_tensorrt
+from functions.detection.tensor_loader import init_tensorrt
 
 
 class HardwareDetector:

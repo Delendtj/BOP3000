@@ -1,5 +1,4 @@
 import cv2
-import numpy as np
 import os
 import sys
 
@@ -8,7 +7,7 @@ ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
-from functions.undistort import undistort
+from functions.spatial.undistort import undistort
 
 VIDEO_PATH = "../videos/calibration.MP4"
 PREVIEW_W, PREVIEW_H = 1920, 1080

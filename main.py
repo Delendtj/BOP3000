@@ -11,29 +11,26 @@ import supervision as sv
 
 from collections import deque
 
-from functions.BBExtractor import extract_helmet_box
-from functions.Inference_roi import (
+from functions.ocr.helmet_crop import extract_helmet_box
+from functions.detection.roi_inference import (
     keep_detections_inside_roi,
     shift_detections_to_full_frame,
 )
-from functions.homography import (
+from functions.spatial.homography import (
     associate_close_helmets_to_wide_helmet_tracks,
     load_homography,
     map_close_point_to_wide_distorted,
     select_close_frame,
 )
-from functions.association import (
+from functions.tracking.association import (
     bbox_top_center_xyxy,
     match_close_helmets_to_people,
 )
-from functions.close_inference import run_close_inference
-from functions.rink_projection import (
-    build_rink_canvas,
-    project_bboxes_to_rink_canvas,
-)
-from functions.lap_panel import render_lap_panel
-from functions.ocr_worker import OCRWorker
-from functions.roi import (
+from functions.detection.close_inference import run_close_inference
+from functions.spatial.rink_projection import project_bboxes_to_rink_canvas
+from functions.visualization.lap_panel import render_lap_panel
+from functions.ocr.ocr_worker import OCRWorker
+from functions.spatial.roi import (
     load_line,
     load_roi,
     roi_inside_roi,
@@ -43,13 +40,17 @@ from functions.roi import (
     select_roi,
     validate_finish_line,
 )
-from functions.assignment import hungarian_assign
-from functions.tracker import Tracker
-from functions.visualization import (
+from functions.tracking.assignment import hungarian_assign
+from functions.tracking.tracker import Tracker
+from functions.visualization.visualization import (
+    build_rink_canvas,
+    compose_display_canvas,
+    compute_window_layout,
     draw_bboxes,
     draw_match_lines,
     draw_rink_match_lines,
     draw_rink_points,
+    get_screen_size,
 )
 from hardware_detector import HardwareDetector
 from pipeline.async_pipeline import AsyncFramePipeline
@@ -98,62 +99,14 @@ YOLO_ROI_PATH = os.path.join("img", "yolo_roi.json")
 OCR_ROI_PATH = os.path.join("img", "ocr_roi.json")
 CLOSE_YOLO_ROI_PATH = os.path.join("img", "close_yolo_roi.json")
 CLOSE_OCR_ROI_PATH = os.path.join("img", "close_ocr_roi.json")
-DISPLAY_PANEL_SIZE = (960, 540)
-# Horizontal rink view (length along width).
-RINK_CANVAS_SIZE = (1200, 600)
 # IIHF 60m x 30m rink -> half-extents: x in [-15, 15], y in [-30, 30]
 RINK_BOUNDS = (-15.0, 15.0, -30.0, 30.0)
 RINK_GOAL_LINE_OFFSET = 26.0
 RINK_RED_LINES = (0.0, -RINK_GOAL_LINE_OFFSET, RINK_GOAL_LINE_OFFSET)
 RINK_MATCH_MAX_DIST = 1.5
-display_width = 1920
-display_height = 1080
-lap_panel_width = 340
-lap_panel_height = 720
-vision_window_name = "SpeedSkate"
+multi_cam_window_name = "Multi-cam view"
+rink_window_name = "Rink view"
 lap_window_name = "Lap Count"
-
-def build_display_panel(frame, title, panel_size, subtitle=None):
-    panel_w, panel_h = panel_size
-    panel = np.zeros((panel_h, panel_w, 3), dtype=np.uint8)
-
-    if frame is not None:
-        src_h, src_w = frame.shape[:2]
-        scale = min(panel_w / src_w, panel_h / src_h)
-        resized_w = max(1, int(src_w * scale))
-        resized_h = max(1, int(src_h * scale))
-        resized = cv2.resize(frame, (resized_w, resized_h))
-        x = (panel_w - resized_w) // 2
-        y = (panel_h - resized_h) // 2
-        panel[y:y + resized_h, x:x + resized_w] = resized
-
-    cv2.putText(
-        panel,
-        title,
-        (16, 32),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.9,
-        (255, 255, 255),
-        2,
-    )
-    if subtitle:
-        cv2.putText(
-            panel,
-            subtitle,
-            (16, 62),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.7,
-            (0, 200, 255),
-            2,
-        )
-
-    return panel
-
-
-def compose_display_canvas(wide_frame, close_frame, wide_subtitle=None, close_subtitle=None):
-    wide_panel = build_display_panel(wide_frame, "Wide", DISPLAY_PANEL_SIZE, wide_subtitle)
-    close_panel = build_display_panel(close_frame, "Close", DISPLAY_PANEL_SIZE, close_subtitle)
-    return np.hstack([wide_panel, close_panel])
 
 def select_ocr_roi_inside_yolo(frame, yolo_roi):
     if frame is None or yolo_roi is None:
@@ -190,6 +143,11 @@ def main():
     model = detector.initialize_model()
 
     total_laps = prompt_total_laps()
+    screen_width, screen_height = get_screen_size()
+    window_layout = compute_window_layout(screen_width, screen_height)
+    display_panel_size = window_layout["display_panel_size"]
+    rink_canvas_size = window_layout["rink_canvas_size"]
+    lap_panel_width, lap_panel_height = window_layout["lap_panel_size"]
 
     # Open video
     preview_cap = cv2.VideoCapture(WIDE_SOURCE)
@@ -233,10 +191,15 @@ def main():
         print(f"Ignoring saved finish line: {finish_line_error}")
         finish_line = None
 
-    cv2.namedWindow(vision_window_name, cv2.WINDOW_NORMAL)
-    cv2.resizeWindow(vision_window_name, display_width, display_height)
+    cv2.namedWindow(multi_cam_window_name, cv2.WINDOW_NORMAL)
+    cv2.resizeWindow(multi_cam_window_name, display_panel_size[0] * 2, display_panel_size[1])
+    cv2.moveWindow(multi_cam_window_name, *window_layout["multi_cam_pos"])
     cv2.namedWindow(lap_window_name, cv2.WINDOW_NORMAL)
     cv2.resizeWindow(lap_window_name, lap_panel_width, lap_panel_height)
+    cv2.moveWindow(lap_window_name, *window_layout["lap_pos"])
+    cv2.namedWindow(rink_window_name, cv2.WINDOW_NORMAL)
+    cv2.resizeWindow(rink_window_name, *rink_canvas_size)
+    cv2.moveWindow(rink_window_name, *window_layout["rink_pos"])
 
     close_yolo_roi = load_roi(CLOSE_YOLO_ROI_PATH)
     if close_yolo_roi is None:
@@ -254,8 +217,6 @@ def main():
         if selected_close_ocr is not None:
             close_ocr_roi = selected_close_ocr
             save_roi(CLOSE_OCR_ROI_PATH, close_ocr_roi)
-
-    cv2.namedWindow('Multi-cam view', cv2.WINDOW_NORMAL)
 
     # THE TRACKER
     tracker = Tracker(
@@ -356,7 +317,7 @@ def main():
                     (0, 255, 255),
                     2,
                 )
-                cv2.imshow(vision_window_name, paused_frame)
+                cv2.imshow(multi_cam_window_name, paused_frame)
                 if last_lap_panel is not None:
                     cv2.imshow(lap_window_name, last_lap_panel)
                 key = cv2.waitKey(30) & 0xFF
@@ -531,7 +492,7 @@ def main():
             if wide_rink_h is not None or close_rink_h is not None:
                 rink_canvas = build_rink_canvas(
                     RINK_BOUNDS,
-                    RINK_CANVAS_SIZE,
+                    rink_canvas_size,
                     draw_center_line=False,
                     draw_center_circle=True,
                     center_circle_radius=4.5,
@@ -543,7 +504,7 @@ def main():
                     tracker.people_tracks.xyxy if len(tracker.people_tracks) > 0 else None,
                     wide_rink_h,
                     RINK_BOUNDS,
-                    RINK_CANVAS_SIZE,
+                    rink_canvas_size,
                     horizontal=True,
                     undistort=True,
                     img_shape=frame.shape,
@@ -552,7 +513,7 @@ def main():
                     close_people.xyxy if close_people is not None and len(close_people) > 0 else None,
                     close_rink_h,
                     RINK_BOUNDS,
-                    RINK_CANVAS_SIZE,
+                    rink_canvas_size,
                     horizontal=True,
                 )
 
@@ -580,7 +541,7 @@ def main():
                         color=(0, 200, 0),
                     )
 
-                cv2.imshow("Rink view", rink_canvas)
+                cv2.imshow(rink_window_name, rink_canvas)
 
             if yolo_roi is not None:
                 cv2.polylines(
@@ -663,8 +624,6 @@ def main():
                 )
                 last_lap_panel_key = lap_panel_key
 
-            last_display_frame = annotated
-            cv2.imshow(vision_window_name, annotated)
             if last_lap_panel is not None:
                 cv2.imshow(lap_window_name, last_lap_panel)
 
@@ -693,14 +652,17 @@ def main():
             elif homography is not None and synced_close_item is None:
                 close_subtitle = "Unsynced preview"
 
+            # Builds the two windows (rink and two cam feeds)
+            # Makes them the correct size based on screen size.
             display_frame = compose_display_canvas(
                 annotated,
                 close_vis,
+                display_panel_size,
                 wide_subtitle=fps_text,
                 close_subtitle=close_subtitle,
             )
             last_display_frame = display_frame
-            cv2.imshow('Multi-cam view', display_frame)
+            cv2.imshow(multi_cam_window_name, display_frame)
 
             # [THis whole block should be placed somewhere else]
             key = cv2.waitKey(1) & 0xFF
