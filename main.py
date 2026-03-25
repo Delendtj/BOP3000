@@ -9,10 +9,27 @@ from tkinter import simpledialog
 import numpy as np
 import supervision as sv
 
+from collections import deque
+
 from functions.BBExtractor import extract_helmet_box
 from functions.Inference_roi import (
     keep_detections_inside_roi,
     shift_detections_to_full_frame,
+)
+from functions.homography import (
+    associate_close_helmets_to_wide_helmet_tracks,
+    load_homography,
+    map_close_point_to_wide_distorted,
+    select_close_frame,
+)
+from functions.association import (
+    bbox_top_center_xyxy,
+    match_close_helmets_to_people,
+)
+from functions.close_inference import run_close_inference
+from functions.rink_projection import (
+    build_rink_canvas,
+    project_bboxes_to_rink_canvas,
 )
 from functions.lap_panel import render_lap_panel
 from functions.ocr_worker import OCRWorker
@@ -26,7 +43,14 @@ from functions.roi import (
     select_roi,
     validate_finish_line,
 )
+from functions.assignment import hungarian_assign
 from functions.tracker import Tracker
+from functions.visualization import (
+    draw_bboxes,
+    draw_match_lines,
+    draw_rink_match_lines,
+    draw_rink_points,
+)
 from hardware_detector import HardwareDetector
 from pipeline.async_pipeline import AsyncFramePipeline
 from utilities.benchmark import OCRThroughputStats
@@ -43,13 +67,24 @@ config = {
     'IMGSZ': 1280,
 }
 
-data_path = "DJI_20260228140513_0010_D.MP4"
-conf_threshold = 0.3
-frame_skip = 1
-ocr_vote = 3          # collect votes for N frames before deciding
+WIDE_SOURCE = "../videos/wide_cam.mp4"
+CLOSE_SOURCE = "../videos/close_cam.mp4"
+CONF_THRESHOLD = 0.2
+FRAME_SKIP = 1
+OCR_VOTE = 3          # collect votes for N frames before deciding
+MAX_SYNC_DELTA = 0.05
+CLOSE_MATCH_MAX_DIST = 120
+CLOSE_HELMET_PERSON_MAX_DIST = 80
+CLOSE_HELMET_PERSON_MAX_BELOW_RATIO = 0.08
+HELMET_CLASS_ID = 0
+PERSON_CLASS_ID = 1
+SYNC_MISS_LOG_INTERVAL = 2.0
+HOMOGRAPHY_PATH = os.path.join("img", "homography.json")
+RINK_WIDE_H_PATH = os.path.join("img", "homography_wide.json")
+RINK_CLOSE_H_PATH = os.path.join("img", "homography_close.json")
 
-inference_config = {
-    'conf': conf_threshold,
+INFERENCE_CONFIG = {
+    'conf': CONF_THRESHOLD,
     'iou': 0.5,
     'max_det': 100,
     'imgsz': 1280,
@@ -58,15 +93,67 @@ inference_config = {
     'verbose': False,
 }
 
-yolo_roi_path = os.path.join("data", "yolo_roi.json")
-ocr_roi_path = os.path.join("data", "ocr_roi.json")
 finish_line_path = os.path.join("data", "finish_line.json")
+YOLO_ROI_PATH = os.path.join("img", "yolo_roi.json")
+OCR_ROI_PATH = os.path.join("img", "ocr_roi.json")
+CLOSE_YOLO_ROI_PATH = os.path.join("img", "close_yolo_roi.json")
+CLOSE_OCR_ROI_PATH = os.path.join("img", "close_ocr_roi.json")
+DISPLAY_PANEL_SIZE = (960, 540)
+# Horizontal rink view (length along width).
+RINK_CANVAS_SIZE = (1200, 600)
+# IIHF 60m x 30m rink -> half-extents: x in [-15, 15], y in [-30, 30]
+RINK_BOUNDS = (-15.0, 15.0, -30.0, 30.0)
+RINK_GOAL_LINE_OFFSET = 26.0
+RINK_RED_LINES = (0.0, -RINK_GOAL_LINE_OFFSET, RINK_GOAL_LINE_OFFSET)
+RINK_MATCH_MAX_DIST = 1.5
 display_width = 1920
 display_height = 1080
 lap_panel_width = 340
 lap_panel_height = 720
 vision_window_name = "SpeedSkate"
 lap_window_name = "Lap Count"
+
+def build_display_panel(frame, title, panel_size, subtitle=None):
+    panel_w, panel_h = panel_size
+    panel = np.zeros((panel_h, panel_w, 3), dtype=np.uint8)
+
+    if frame is not None:
+        src_h, src_w = frame.shape[:2]
+        scale = min(panel_w / src_w, panel_h / src_h)
+        resized_w = max(1, int(src_w * scale))
+        resized_h = max(1, int(src_h * scale))
+        resized = cv2.resize(frame, (resized_w, resized_h))
+        x = (panel_w - resized_w) // 2
+        y = (panel_h - resized_h) // 2
+        panel[y:y + resized_h, x:x + resized_w] = resized
+
+    cv2.putText(
+        panel,
+        title,
+        (16, 32),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.9,
+        (255, 255, 255),
+        2,
+    )
+    if subtitle:
+        cv2.putText(
+            panel,
+            subtitle,
+            (16, 62),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.7,
+            (0, 200, 255),
+            2,
+        )
+
+    return panel
+
+
+def compose_display_canvas(wide_frame, close_frame, wide_subtitle=None, close_subtitle=None):
+    wide_panel = build_display_panel(wide_frame, "Wide", DISPLAY_PANEL_SIZE, wide_subtitle)
+    close_panel = build_display_panel(close_frame, "Close", DISPLAY_PANEL_SIZE, close_subtitle)
+    return np.hstack([wide_panel, close_panel])
 
 def select_ocr_roi_inside_yolo(frame, yolo_roi):
     if frame is None or yolo_roi is None:
@@ -78,7 +165,8 @@ def select_ocr_roi_inside_yolo(frame, yolo_roi):
             return None
         if roi_inside_roi(candidate, yolo_roi):
             return candidate
-        print("OCR ROI must be inside YOLO ROI. Draw again or press Esc to cancel.")
+    print("OCR ROI must be inside YOLO ROI. Draw again or press Esc to cancel.")
+
 def prompt_total_laps():
     root = tk.Tk()
     root.withdraw()
@@ -104,25 +192,31 @@ def main():
     total_laps = prompt_total_laps()
 
     # Open video
-    preview_cap = cv2.VideoCapture(data_path)
+    preview_cap = cv2.VideoCapture(WIDE_SOURCE)
     fps = preview_cap.get(cv2.CAP_PROP_FPS)
-    ret, preview_frame = preview_cap.read()
+    wide_ret, preview_frame = preview_cap.read()
     preview_cap.release()
 
-    # Downscales if it isn't 1080p
     preview_frame = downscale_to_1080p(preview_frame)
-
-    if not ret:
+    if not wide_ret:
         raise RuntimeError("Could not read initial frame for ROI.")
 
+    close_preview_cap = cv2.VideoCapture(CLOSE_SOURCE)
+    close_ret, close_preview_frame = close_preview_cap.read()
+    close_preview_cap.release()
+
+    close_preview_frame = downscale_to_1080p(close_preview_frame)
+    if not close_ret:
+        raise RuntimeError("Could not read initial close frame for ROI.")
+
     # ROI
-    yolo_roi = load_roi(yolo_roi_path)
+    yolo_roi = load_roi(YOLO_ROI_PATH)
     if yolo_roi is None:
         yolo_roi = select_roi(preview_frame, window_name="YOLO ROI Selector")
         if yolo_roi is not None:
-            save_roi(yolo_roi_path, yolo_roi)
+            save_roi(YOLO_ROI_PATH, yolo_roi)
 
-    ocr_roi = load_roi(ocr_roi_path)
+    ocr_roi = load_roi(OCR_ROI_PATH)
     if ocr_roi is not None and yolo_roi is not None and not roi_inside_roi(ocr_roi, yolo_roi):
         print("Loaded OCR ROI is outside YOLO ROI. Please redraw OCR ROI.")
         ocr_roi = None
@@ -131,7 +225,7 @@ def main():
         selected_ocr = select_ocr_roi_inside_yolo(preview_frame, yolo_roi)
         if selected_ocr is not None:
             ocr_roi = selected_ocr
-            save_roi(ocr_roi_path, ocr_roi)
+            save_roi(OCR_ROI_PATH, ocr_roi)
 
     finish_line = load_line(finish_line_path)
     finish_line_error = validate_finish_line(finish_line, frame_shape=preview_frame.shape, roi=yolo_roi)
@@ -144,10 +238,29 @@ def main():
     cv2.namedWindow(lap_window_name, cv2.WINDOW_NORMAL)
     cv2.resizeWindow(lap_window_name, lap_panel_width, lap_panel_height)
 
+    close_yolo_roi = load_roi(CLOSE_YOLO_ROI_PATH)
+    if close_yolo_roi is None:
+        close_yolo_roi = select_roi(close_preview_frame, window_name="Close YOLO ROI Selector")
+        if close_yolo_roi is not None:
+            save_roi(CLOSE_YOLO_ROI_PATH, close_yolo_roi)
+
+    close_ocr_roi = load_roi(CLOSE_OCR_ROI_PATH)
+    if close_ocr_roi is not None and close_yolo_roi is not None and not roi_inside_roi(close_ocr_roi, close_yolo_roi):
+        print("Loaded close OCR ROI is outside close YOLO ROI. Please redraw.")
+        close_ocr_roi = None
+
+    if close_ocr_roi is None and close_yolo_roi is not None:
+        selected_close_ocr = select_ocr_roi_inside_yolo(close_preview_frame, close_yolo_roi)
+        if selected_close_ocr is not None:
+            close_ocr_roi = selected_close_ocr
+            save_roi(CLOSE_OCR_ROI_PATH, close_ocr_roi)
+
+    cv2.namedWindow('Multi-cam view', cv2.WINDOW_NORMAL)
+
     # THE TRACKER
     tracker = Tracker(
-        ocr_vote,
-        conf_threshold,
+        OCR_VOTE,
+        CONF_THRESHOLD,
         ocr_roi,
         frame_rate=fps,
         finish_line=finish_line,
@@ -155,16 +268,64 @@ def main():
     )
 
     # Initialize threads and processes
+    # WIDE Source
     pipeline = AsyncFramePipeline(
-        source=data_path,
-        frame_skip=frame_skip,
+        source=WIDE_SOURCE,
+        frame_skip=FRAME_SKIP,
         queue_size=3,
         inference_roi=yolo_roi,
+    )
+    # CLOSE Source
+    pipeline_close = AsyncFramePipeline(
+        source=CLOSE_SOURCE,
+        frame_skip=FRAME_SKIP,
+        queue_size=3,
+        inference_roi=close_yolo_roi,
     )
 
     ocr_worker = OCRWorker()
     ocr_worker.start()
     pipeline.start()
+    pipeline_close.start()
+
+    close_buffer = deque(maxlen=32)
+    latest_close_item = None
+
+    # Load/Check Homography
+    try:
+        homography = load_homography(HOMOGRAPHY_PATH)
+        if homography.source_role != "close" or homography.target_role != "wide":
+            raise RuntimeError(
+                f"Homography must map close -> wide, got {homography.source_role} -> {homography.target_role}."
+            )
+        print(
+            f"Loaded homography direction: {homography.source_role} -> {homography.target_role}"
+        )
+    except FileNotFoundError:
+        homography = None
+        print("Homography missing, cross-camera crops disabled.")
+
+    try:
+        wide_rink_h = load_homography(RINK_WIDE_H_PATH)
+        if wide_rink_h.source_role != "wide" or wide_rink_h.target_role != "rink":
+            raise RuntimeError(
+                f"Wide rink homography must map wide -> rink, got {wide_rink_h.source_role} -> {wide_rink_h.target_role}."
+            )
+        print("Loaded wide->rink homography.")
+    except FileNotFoundError:
+        wide_rink_h = None
+        print("Wide rink homography missing, rink view will omit wide points.")
+
+    try:
+        close_rink_h = load_homography(RINK_CLOSE_H_PATH)
+        if close_rink_h.source_role != "close" or close_rink_h.target_role != "rink":
+            raise RuntimeError(
+                f"Close rink homography must map close -> rink, got {close_rink_h.source_role} -> {close_rink_h.target_role}."
+            )
+        print("Loaded close->rink homography.")
+    except FileNotFoundError:
+        close_rink_h = None
+        print("Close rink homography missing, rink view will omit close points.")
 
     # Section for initializing benchmark classes here:
     ocr_bench = OCRThroughputStats(log_every_sec=2.0)
@@ -176,8 +337,10 @@ def main():
     last_display_frame = None
     last_lap_panel = None
     last_lap_panel_key = None
+    close_sync_misses = 0
+    last_close_sync_log = 0.0
 
-    print("Controls: Esc=quit, Space=pause/resume, r=redraw YOLO ROI, o=redraw OCR ROI, f=redraw finish line")
+    print("Controls: Esc=quit, Space=pause/resume, r/o=wide ROIs, c/v=close ROIs")
 
     try:
         while True:
@@ -203,6 +366,15 @@ def main():
                     paused = False
                 continue
 
+            # Read frames from close camera (From Asyncpipeline queue)
+            while True:
+                close_item = pipeline_close.read(timeout=0.01)
+
+                if close_item is None:
+                    break
+                latest_close_item = close_item
+                close_buffer.append((close_item.ts, close_item))
+
             item = pipeline.read(timeout=0.5)
             if item is None:
                 if pipeline.stop_event.is_set():
@@ -215,15 +387,17 @@ def main():
 
             frame_count += 1
 
+            # Maybe we only need detection for class 1 (people) here???
             result = model(
                 inference_frame,
-                conf=inference_config['conf'],
-                iou=inference_config['iou'],
-                max_det=inference_config['max_det'],
-                imgsz=inference_config['imgsz'],
-                half=inference_config['half'],
-                device=inference_config['device'],
-                verbose=inference_config['verbose']
+                conf=INFERENCE_CONFIG['conf'],
+                iou=INFERENCE_CONFIG['iou'],
+                max_det=INFERENCE_CONFIG['max_det'],
+                imgsz=INFERENCE_CONFIG['imgsz'],
+                half=INFERENCE_CONFIG['half'],
+                device=INFERENCE_CONFIG['device'],
+                verbose=INFERENCE_CONFIG['verbose'],
+                classes=[PERSON_CLASS_ID]
             )[0]
 
             detections = sv.Detections.from_ultralytics(result)
@@ -236,20 +410,177 @@ def main():
             tracker.update_lap_counts()
 
             # Extract better crop from helmet detections and give to worker queue
+            close_frame = None
+            close_inference_frame = None
+            synced_close_item = None
+            if homography is not None:
+                synced_close_item = select_close_frame(close_buffer, item.ts, MAX_SYNC_DELTA)
+                if synced_close_item is not None:
+                    close_frame = synced_close_item.frame
+                    close_inference_frame = (
+                        synced_close_item.inference_frame
+                        if synced_close_item.inference_frame is not None
+                        else close_frame
+                    )
+
+            close_vis = None
+            latest_close_frame = latest_close_item.frame if latest_close_item is not None else None
+
+            wide_overlay_points = []
+            close_people = None
             if ocr_roi is not None:
                 helmet_tracks = tracker.get_non_confirmed_helmet_tracks()
                 helmet_in_roi = keep_detections_inside_roi(helmet_tracks, ocr_roi)
-                # Submit crops into OCR worker
-                helmet_crops = extract_helmet_box(helmet_in_roi, frame)
+                helmet_crops = []
+
+                if homography is not None:
+                    if synced_close_item is None:
+                        if len(helmet_in_roi) > 0:
+                            close_sync_misses += 1
+                            now = time.perf_counter()
+                            if now - last_close_sync_log >= SYNC_MISS_LOG_INTERVAL:
+                                print(
+                                    f"Skipping multi-cam OCR: no close frame within {MAX_SYNC_DELTA:.3f}s "
+                                    f"(misses={close_sync_misses})"
+                                )
+                                last_close_sync_log = now
+
+                # This whole if contains everything with homography association for helmet
+                if synced_close_item is not None and homography is not None:
+                    close_out = run_close_inference(
+                        model=model,
+                        frame_item=synced_close_item,
+                        inference_config=INFERENCE_CONFIG,
+                        helmet_class_id=HELMET_CLASS_ID,
+                        person_class_id=PERSON_CLASS_ID,
+                        yolo_roi=close_yolo_roi,
+                        ocr_roi=close_ocr_roi,
+                    )
+                    close_helmets = close_out.helmets
+                    close_people = close_out.people
+
+                    close_vis = close_frame.copy()
+
+                    draw_bboxes(close_vis, close_helmets, (0, 0, 255), thickness=2)
+                    draw_bboxes(close_vis, close_people, (255, 0, 0), thickness=2)
+
+                    helmet_person_matches = match_close_helmets_to_people(
+                        close_helmets,
+                        close_people,
+                        max_dist=CLOSE_HELMET_PERSON_MAX_DIST,
+                        max_person_top_below_ratio=CLOSE_HELMET_PERSON_MAX_BELOW_RATIO,
+                    )
+                    draw_match_lines(
+                        close_vis,
+                        close_helmets,
+                        close_people,
+                        helmet_person_matches,
+                        bbox_top_center_xyxy,
+                        bbox_top_center_xyxy,
+                        (0, 255, 0),
+                        thickness=2,
+                    )
+
+                    # Visualize homography on wide frame (project close -> wide).
+                    if len(close_helmets) > 0:
+                        for bbox in close_helmets.xyxy:
+                            cx = float((bbox[0] + bbox[2]) / 2.0)
+                            cy = float((bbox[1] + bbox[3]) / 2.0)
+
+                            projected = map_close_point_to_wide_distorted(
+                                homography,
+                                cx,
+                                cy,
+                                wide_img_shape=frame.shape,
+                            )
+                            if projected is None:
+                                continue
+                            wide_overlay_points.append((int(projected[0]), int(projected[1])))
+
+                        helmet_crops = associate_close_helmets_to_wide_helmet_tracks(
+                            helmet_in_roi,
+                            close_helmets,
+                            close_frame,
+                            homography,
+                            CLOSE_MATCH_MAX_DIST,
+                        )
+                else:
+                    # OLD: Without homography           [FIND A WAY TO GET RID OF THIS]
+                    helmet_crops = extract_helmet_box(helmet_in_roi, frame)
+
+                # Give associated helmet crops to the ocr_worker
+                # This means if associate_close_helmet_crops() fails, nothing goes to the OCR
                 for h in helmet_crops:
                     ocr_worker.submit(h)
 
             # Evaluate if the detection is good enough to be set for tracks
             helmets_res = ocr_worker.drain_results()
-            tracker.check_for_ocr(helmets_res)
+            tracker.check_for_ocr(helmets_res) # Includes all voting logic.
 
             # Annotate frames
             annotated = tracker.annotate(frame)
+
+            # Draw projected points for visualization
+            if wide_overlay_points:
+                for px, py in wide_overlay_points:
+                    # print(0 <= px < annotated.shape[1] and 0 <= py < annotated.shape[0])
+                    if 0 <= px < annotated.shape[1] and 0 <= py < annotated.shape[0]:
+                        cv2.circle(annotated, (px, py), 10, (0, 0, 255), -1)
+
+            # Rink-space view (project wide + close points into rink coords)
+            if wide_rink_h is not None or close_rink_h is not None:
+                rink_canvas = build_rink_canvas(
+                    RINK_BOUNDS,
+                    RINK_CANVAS_SIZE,
+                    draw_center_line=False,
+                    draw_center_circle=True,
+                    center_circle_radius=4.5,
+                    horizontal=True,
+                    red_lines=RINK_RED_LINES,
+                )
+
+                wide_rink_points = project_bboxes_to_rink_canvas(
+                    tracker.people_tracks.xyxy if len(tracker.people_tracks) > 0 else None,
+                    wide_rink_h,
+                    RINK_BOUNDS,
+                    RINK_CANVAS_SIZE,
+                    horizontal=True,
+                    undistort=True,
+                    img_shape=frame.shape,
+                )
+                close_rink_points = project_bboxes_to_rink_canvas(
+                    close_people.xyxy if close_people is not None and len(close_people) > 0 else None,
+                    close_rink_h,
+                    RINK_BOUNDS,
+                    RINK_CANVAS_SIZE,
+                    horizontal=True,
+                )
+
+                draw_rink_points(
+                    rink_canvas,
+                    [canvas_xy for _, canvas_xy in wide_rink_points],
+                    color=(0, 0, 255),
+                )
+                draw_rink_points(
+                    rink_canvas,
+                    [canvas_xy for _, canvas_xy in close_rink_points],
+                    color=(255, 0, 0),
+                )
+
+                # Draw connections between projected points from both cameras.
+                if wide_rink_points and close_rink_points:
+                    wide_xy = [p[0] for p in wide_rink_points]
+                    close_xy = [p[0] for p in close_rink_points]
+                    matches = hungarian_assign(wide_xy, close_xy, max_dist=RINK_MATCH_MAX_DIST)
+                    draw_rink_match_lines(
+                        rink_canvas,
+                        matches,
+                        [canvas_xy for _, canvas_xy in wide_rink_points],
+                        [canvas_xy for _, canvas_xy in close_rink_points],
+                        color=(0, 200, 0),
+                    )
+
+                cv2.imshow("Rink view", rink_canvas)
 
             if yolo_roi is not None:
                 cv2.polylines(
@@ -312,7 +643,7 @@ def main():
                 (0, 255, 255),
                 2,
             )
-
+            # Lap counting GUI logic
             lap_rows = tracker.get_active_lap_counts()
             lap_panel_key = (
                 finish_line is not None,
@@ -337,6 +668,41 @@ def main():
             if last_lap_panel is not None:
                 cv2.imshow(lap_window_name, last_lap_panel)
 
+            if close_vis is None and latest_close_frame is not None:
+                close_vis = latest_close_frame.copy()
+            if close_vis is not None and close_yolo_roi is not None:
+                cv2.polylines(
+                    close_vis,
+                    [np.array(close_yolo_roi, dtype=np.int32)],
+                    True,
+                    (0, 255, 255),
+                    2,
+                )
+            if close_vis is not None and close_ocr_roi is not None:
+                cv2.polylines(
+                    close_vis,
+                    [np.array(close_ocr_roi, dtype=np.int32)],
+                    True,
+                    (0, 200, 0),
+                    2,
+                )
+
+            close_subtitle = None
+            if latest_close_frame is None:
+                close_subtitle = "No close frame"
+            elif homography is not None and synced_close_item is None:
+                close_subtitle = "Unsynced preview"
+
+            display_frame = compose_display_canvas(
+                annotated,
+                close_vis,
+                wide_subtitle=fps_text,
+                close_subtitle=close_subtitle,
+            )
+            last_display_frame = display_frame
+            cv2.imshow('Multi-cam view', display_frame)
+
+            # [THis whole block should be placed somewhere else]
             key = cv2.waitKey(1) & 0xFF
             if key == 27:
                 break
@@ -348,7 +714,7 @@ def main():
                 if new_yolo_roi is not None:
                     yolo_roi = new_yolo_roi
                     pipeline.set_inference_roi(yolo_roi)
-                    save_roi(yolo_roi_path, yolo_roi)
+                    save_roi(YOLO_ROI_PATH, yolo_roi)
                     if ocr_roi is not None and not roi_inside_roi(ocr_roi, yolo_roi):
                         print("Current OCR ROI is outside updated YOLO ROI. Press 'o' to redraw OCR ROI.")
                         ocr_roi = None
@@ -366,7 +732,7 @@ def main():
                     if new_ocr_roi is not None:
                         ocr_roi = new_ocr_roi
                         tracker.set_roi(ocr_roi)
-                        save_roi(ocr_roi_path, ocr_roi)
+                        save_roi(OCR_ROI_PATH, ocr_roi)
             if key == ord("f"):
                 new_finish_line = select_line(frame, window_name="Finish Line Selector")
                 if new_finish_line is not None:
@@ -384,9 +750,31 @@ def main():
                         if line_changed:
                             print("Finish line updated. Lap counts reset.")
                         save_line(finish_line_path, finish_line)
+                        save_roi(OCR_ROI_PATH, ocr_roi)
+            if key == ord("c"):
+                if close_yolo_roi is None:
+                    close_yolo_roi = select_roi(close_preview_frame, window_name="Close YOLO ROI Selector")
+                    if close_yolo_roi is not None:
+                        save_roi(CLOSE_YOLO_ROI_PATH, close_yolo_roi)
+                        pipeline_close.set_inference_roi(close_yolo_roi)
+                else:
+                    new_close_yolo = select_roi(close_preview_frame, window_name="Close YOLO ROI Selector")
+                    if new_close_yolo is not None:
+                        close_yolo_roi = new_close_yolo
+                        save_roi(CLOSE_YOLO_ROI_PATH, close_yolo_roi)
+                        pipeline_close.set_inference_roi(close_yolo_roi)
+            if key == ord("v"):
+                if close_yolo_roi is None:
+                    print("Define close YOLO ROI first (press 'c').")
+                else:
+                    new_close_ocr = select_ocr_roi_inside_yolo(close_preview_frame, close_yolo_roi)
+                    if new_close_ocr is not None:
+                        close_ocr_roi = new_close_ocr
+                        save_roi(CLOSE_OCR_ROI_PATH, close_ocr_roi)
     finally:
         ocr_worker.stop()
         pipeline.stop()
+        pipeline_close.stop()
         cv2.destroyAllWindows()
 
 # Main guard needed for multiprocessing

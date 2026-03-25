@@ -62,21 +62,34 @@ def _capture_loop(cap: cv2.VideoCapture,
     out_q: kø som får FrameItem (ts + frame).
     """
     i = 0
+    # Throttle fps if the source is a video (has fps)
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    if fps and fps > 0:
+        frame_interval = 1.0 / fps
+    else:
+        frame_interval = None
+
+
     while not stop_event.is_set():
         ret, frame = cap.read()
-
-        frame = downscale_to_1080p(frame)
-
         if not ret:
             # video ferdig / kamera feilet
+            print(f"[capture_loop] ret=False after {i} frames")
             stop_event.set()
             break
+
+        # Checks if image is above 1080p.
+        frame = downscale_to_1080p(frame)
 
         i += 1
         if frame_skip > 1 and (i % frame_skip != 0):
             continue
 
         out_q.put_latest(FrameItem(time.perf_counter(), frame))
+
+        # Throttle fps
+        if frame_interval is not None:
+            time.sleep(frame_interval)
 
 
 # 4) Tråd 2: Preprocessing (valgfritt steg egt kan sees på)

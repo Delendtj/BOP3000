@@ -61,7 +61,7 @@ class Tracker:
         self.tracker_helmet = ByteTrackTracker(
             lost_track_buffer=90,
             frame_rate=self.frame_rate,
-            track_activation_threshold=0.35,
+            #track_activation_threshold=0.35,
             high_conf_det_threshold=0.45,
             minimum_iou_threshold=0.08,
             minimum_consecutive_frames=2,
@@ -312,7 +312,6 @@ class Tracker:
 
             # Skip ids that are already confirmed
             if tid not in allowed_ids:
-                print("current id: ", tid, " not in allowed id list: ", allowed_ids)
                 continue
 
             # Skip tracks that isn't confirmed by ByteTrack yet.
