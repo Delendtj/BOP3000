@@ -12,9 +12,9 @@ def _hungarian(cost: np.ndarray) -> list[tuple[int, int]]:
     """
     cost = cost.copy()
     n = cost.shape[0]
-    # Step 1: subtract row minima
+    # Find minimum of each row, and then subtract that from the corresponding row
     cost -= cost.min(axis=1, keepdims=True)
-    # Step 2: subtract column minima
+    # Find minimum of each column, and then subtract that from the corresponding column
     cost -= cost.min(axis=0, keepdims=True)
 
     # Masks: 0=none, 1=starred, 2=primed
@@ -110,16 +110,16 @@ def _hungarian(cost: np.ndarray) -> list[tuple[int, int]]:
 
 
 def hungarian_assign(
-    left_points: Iterable[tuple[float, float]],
-    right_points: Iterable[tuple[float, float]],
+    wide_points: Iterable[tuple[float, float]],
+    close_points: Iterable[tuple[float, float]],
     max_dist: float,
 ) -> list[tuple[int, int, float]]:
     """
-    One-to-one assignment between left_points and right_points using Hungarian algorithm.
-    Returns (left_idx, right_idx, dist) for assignments within max_dist.
+    One-to-one assignment between wide_points and close_points using Hungarian algorithm.
+    Returns (wide_idx, close_idx, dist) for assignments within max_dist.
     """
-    left = np.asarray(list(left_points), dtype=np.float32)
-    right = np.asarray(list(right_points), dtype=np.float32)
+    left = np.asarray(list(wide_points), dtype=np.float32)
+    right = np.asarray(list(close_points), dtype=np.float32)
     if left.size == 0 or right.size == 0:
         return []
 

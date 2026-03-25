@@ -9,26 +9,17 @@ import supervision as sv
 
 from collections import deque
 
-from functions.ocr.helmet_crop import extract_helmet_box
-from functions.detection.roi_inference import (
-    keep_detections_inside_roi,
-    shift_detections_to_full_frame,
+from functions.tracking.close_association import bbox_top_center_xyxy, match_close_helmets_to_people
+from functions.tracking.cross_camera_transfer import (
+    build_close_to_wide_mapping,
+    build_helmet_crops_for_wide_ids,
 )
-from functions.spatial.homography import (
-    associate_close_helmets_to_wide_helmet_tracks,
-    load_homography,
-    map_close_point_to_wide_distorted,
-    select_close_frame,
-)
-from functions.tracking.association import (
-    bbox_top_center_xyxy,
-    match_close_helmets_to_people,
-)
+from functions.detection.roi_inference import keep_detections_inside_roi, shift_detections_to_full_frame
 from functions.detection.close_inference import run_close_inference
-from functions.spatial.rink_projection import project_bboxes_to_rink_canvas
-from functions.visualization.lap_panel import render_lap_panel, prompt_total_laps
 from functions.ocr.ocr_worker import OCRWorker
-from functions.spatial.roi.io import load_line, load_roi, save_line, save_roi
+from functions.spatial.homography import select_close_frame, load_close_homography, load_wide_homography
+from functions.visualization.lap_panel import render_lap_panel, prompt_total_laps
+from functions.spatial.roi.io import save_line, save_roi
 from functions.spatial.roi.selection import select_line, select_roi
 from functions.spatial.roi.setup import (
     load_or_select_close_rois,
@@ -36,16 +27,13 @@ from functions.spatial.roi.setup import (
     select_ocr_roi_inside_yolo,
 )
 from functions.spatial.roi.validation import roi_inside_roi, validate_finish_line
-from functions.tracking.assignment import hungarian_assign
 from functions.tracking.tracker import Tracker
+from functions.visualization.rink_view import build_rink_view
 from functions.visualization.visualization import (
-    build_rink_canvas,
     compose_display_canvas,
     compute_window_layout,
     draw_bboxes,
     draw_match_lines,
-    draw_rink_match_lines,
-    draw_rink_points,
     get_screen_size,
 )
 from hardware_detector import HardwareDetector
@@ -70,7 +58,6 @@ CONF_THRESHOLD = 0.2
 FRAME_SKIP = 1
 OCR_VOTE = 3          # collect votes for N frames before deciding
 MAX_SYNC_DELTA = 0.05
-CLOSE_MATCH_MAX_DIST = 120
 CLOSE_HELMET_PERSON_MAX_DIST = 80
 CLOSE_HELMET_PERSON_MAX_BELOW_RATIO = 0.08
 HELMET_CLASS_ID = 0
@@ -194,55 +181,25 @@ def main():
         inference_roi=close_yolo_roi,
     )
     # Create worker process for OCR
-
-    # Start both the async-pipelines (threads) and worker process
     ocr_worker = OCRWorker()
+    # Start both the async-pipelines (threads) and worker process
     ocr_worker.start()
     pipeline.start()
     pipeline_close.start()
 
+    # Close buffer that contains elements of (timestamp, frame)
+    # We do this because frames from both sources arrive at different time.
+    # So when we process wide frames, we look at the latest_close_item
+    # This is the frame that has the closest timestamp compared to the wide frame.
     close_buffer = deque(maxlen=32)
     latest_close_item = None
 
-    # [SECTION] Homography (usually referred to as 'h')
 
-    # Load/Check Homography
-    # The homography is used to project points into virtual rink space.
-    try:
-        homography = load_homography(HOMOGRAPHY_PATH)
-        if homography.source_role != "close" or homography.target_role != "wide":
-            raise RuntimeError(
-                f"Homography must map close -> wide, got {homography.source_role} -> {homography.target_role}."
-            )
-        print(
-            f"Loaded homography direction: {homography.source_role} -> {homography.target_role}"
-        )
-    except FileNotFoundError:
-        homography = None
-        print("Homography missing, cross-camera crops disabled.")
-
-
-    try:
-        wide_rink_h = load_homography(RINK_WIDE_H_PATH)
-        if wide_rink_h.source_role != "wide" or wide_rink_h.target_role != "rink":
-            raise RuntimeError(
-                f"Wide rink homography must map wide -> rink, got {wide_rink_h.source_role} -> {wide_rink_h.target_role}."
-            )
-        print("Loaded wide->rink homography.")
-    except FileNotFoundError:
-        wide_rink_h = None
-        print("Wide rink homography missing, rink view will omit wide points.")
-
-    try:
-        close_rink_h = load_homography(RINK_CLOSE_H_PATH)
-        if close_rink_h.source_role != "close" or close_rink_h.target_role != "rink":
-            raise RuntimeError(
-                f"Close rink homography must map close -> rink, got {close_rink_h.source_role} -> {close_rink_h.target_role}."
-            )
-        print("Loaded close->rink homography.")
-    except FileNotFoundError:
-        close_rink_h = None
-        print("Close rink homography missing, rink view will omit close points.")
+    # Loading rink homography for both wide and close feed.
+    # These are the homography that contain the numbers that allow
+    # the program to project points the different cameras into the virtual rink space.
+    wide_rink_h = load_wide_homography(RINK_WIDE_H_PATH)
+    close_rink_h = load_close_homography(RINK_CLOSE_H_PATH)
 
     # Section for initializing benchmark classes here:
     ocr_bench = OCRThroughputStats(log_every_sec=2.0)
@@ -328,29 +285,22 @@ def main():
 
             # Extract better crop from helmet detections and give to worker queue
             close_frame = None
-            close_inference_frame = None
             synced_close_item = None
-            if homography is not None:
+            if close_rink_h is not None:
                 synced_close_item = select_close_frame(close_buffer, item.ts, MAX_SYNC_DELTA)
                 if synced_close_item is not None:
                     close_frame = synced_close_item.frame
-                    close_inference_frame = (
-                        synced_close_item.inference_frame
-                        if synced_close_item.inference_frame is not None
-                        else close_frame
-                    )
 
             close_vis = None
             latest_close_frame = latest_close_item.frame if latest_close_item is not None else None
 
-            wide_overlay_points = []
             close_people = None
+            helmet_crops = []
             if ocr_roi is not None:
                 helmet_tracks = tracker.get_non_confirmed_helmet_tracks()
                 helmet_in_roi = keep_detections_inside_roi(helmet_tracks, ocr_roi)
-                helmet_crops = []
 
-                if homography is not None:
+                if close_rink_h is not None:
                     if synced_close_item is None:
                         if len(helmet_in_roi) > 0:
                             close_sync_misses += 1
@@ -362,8 +312,8 @@ def main():
                                 )
                                 last_close_sync_log = now
 
-                # This whole if contains everything with homography association for helmet
-                if synced_close_item is not None and homography is not None:
+                # Contains all about association between cameras
+                if synced_close_item is not None and close_rink_h is not None:
                     close_out = run_close_inference(
                         model=model,
                         frame_item=synced_close_item,
@@ -373,20 +323,27 @@ def main():
                         yolo_roi=close_yolo_roi,
                         ocr_roi=close_ocr_roi,
                     )
+                    # Separate helmets and people from the result
                     close_helmets = close_out.helmets
                     close_people = close_out.people
 
                     close_vis = close_frame.copy()
 
+                    # Draw boxes on each
                     draw_bboxes(close_vis, close_helmets, (0, 0, 255), thickness=2)
                     draw_bboxes(close_vis, close_people, (255, 0, 0), thickness=2)
 
+                    # Runs the logic for pairing helmets and people tracks (close cam)
+                    # This simply returns (helmet_idx, person_idx, dist) for each match it finds.
+                    # Index for close_helmets, close_people.
                     helmet_person_matches = match_close_helmets_to_people(
                         close_helmets,
                         close_people,
                         max_dist=CLOSE_HELMET_PERSON_MAX_DIST,
                         max_person_top_below_ratio=CLOSE_HELMET_PERSON_MAX_BELOW_RATIO,
                     )
+
+                    # Draws the line between top center of the matching helmet and person bboxes.
                     draw_match_lines(
                         close_vis,
                         close_helmets,
@@ -398,37 +355,22 @@ def main():
                         thickness=2,
                     )
 
-
-                    # (I believe this is Legacy code)
-                    # Visualize homography on wide frame (project close -> wide).
-                    if len(close_helmets) > 0:
-                        for bbox in close_helmets.xyxy:
-                            cx = float((bbox[0] + bbox[2]) / 2.0)
-                            cy = float((bbox[1] + bbox[3]) / 2.0)
-
-                            projected = map_close_point_to_wide_distorted(
-                                homography,
-                                cx,
-                                cy,
-                                wide_img_shape=frame.shape,
-                            )
-                            if projected is None:
-                                continue
-                            wide_overlay_points.append((int(projected[0]), int(projected[1])))
-
-                        helmet_crops = associate_close_helmets_to_wide_helmet_tracks(
-                            helmet_in_roi,
-                            close_helmets,
-                            close_frame,
-                            homography,
-                            CLOSE_MATCH_MAX_DIST,
-                        )
-                else:
-                    # OLD: Without homography           [FIND A WAY TO GET RID OF THIS]
-                    helmet_crops = extract_helmet_box(helmet_in_roi, frame)
+                    close_to_wide_tid = build_close_to_wide_mapping(
+                        tracker.people_tracks,
+                        close_people,
+                        wide_rink_h,
+                        close_rink_h,
+                        img_shape=frame.shape,
+                        max_dist=RINK_MATCH_MAX_DIST,
+                    )
+                    helmet_crops = build_helmet_crops_for_wide_ids(
+                        close_helmets,
+                        close_frame,
+                        helmet_person_matches,
+                        close_to_wide_tid,
+                    )
 
                 # Give associated helmet crops to the ocr_worker
-                # This means if associate_close_helmet_crops() fails, nothing goes to the OCR
                 for h in helmet_crops:
                     ocr_worker.submit(h)
 
@@ -439,65 +381,24 @@ def main():
             # Annotate frames
             annotated = tracker.annotate(frame)
 
-            # Draw projected points for visualization
-            if wide_overlay_points:
-                for px, py in wide_overlay_points:
-                    # print(0 <= px < annotated.shape[1] and 0 <= py < annotated.shape[0])
-                    if 0 <= px < annotated.shape[1] and 0 <= py < annotated.shape[0]:
-                        cv2.circle(annotated, (px, py), 10, (0, 0, 255), -1)
-
-            # Rink-space view (project wide + close points into rink coords)
+            # Creates the Rink-Space window
+            # This is used as a canvas for points representing people tracks on both cams
             if wide_rink_h is not None or close_rink_h is not None:
-                rink_canvas = build_rink_canvas(
-                    RINK_BOUNDS,
-                    rink_canvas_size,
+                rink_canvas = build_rink_view(
+                    wide_tracks=tracker.people_tracks if len(tracker.people_tracks) > 0 else None,
+                    close_people=close_people,
+                    wide_rink_h=wide_rink_h,
+                    close_rink_h=close_rink_h,
+                    bounds=RINK_BOUNDS,
+                    canvas_size=rink_canvas_size,
+                    img_shape=frame.shape,
+                    max_dist=RINK_MATCH_MAX_DIST,
+                    horizontal=True,
                     draw_center_line=False,
                     draw_center_circle=True,
                     center_circle_radius=4.5,
-                    horizontal=True,
                     red_lines=RINK_RED_LINES,
                 )
-
-                wide_rink_points = project_bboxes_to_rink_canvas(
-                    tracker.people_tracks.xyxy if len(tracker.people_tracks) > 0 else None,
-                    wide_rink_h,
-                    RINK_BOUNDS,
-                    rink_canvas_size,
-                    horizontal=True,
-                    undistort=True,
-                    img_shape=frame.shape,
-                )
-                close_rink_points = project_bboxes_to_rink_canvas(
-                    close_people.xyxy if close_people is not None and len(close_people) > 0 else None,
-                    close_rink_h,
-                    RINK_BOUNDS,
-                    rink_canvas_size,
-                    horizontal=True,
-                )
-
-                draw_rink_points(
-                    rink_canvas,
-                    [canvas_xy for _, canvas_xy in wide_rink_points],
-                    color=(0, 0, 255),
-                )
-                draw_rink_points(
-                    rink_canvas,
-                    [canvas_xy for _, canvas_xy in close_rink_points],
-                    color=(255, 0, 0),
-                )
-
-                # Draw connections between projected points from both cameras.
-                if wide_rink_points and close_rink_points:
-                    wide_xy = [p[0] for p in wide_rink_points]
-                    close_xy = [p[0] for p in close_rink_points]
-                    matches = hungarian_assign(wide_xy, close_xy, max_dist=RINK_MATCH_MAX_DIST)
-                    draw_rink_match_lines(
-                        rink_canvas,
-                        matches,
-                        [canvas_xy for _, canvas_xy in wide_rink_points],
-                        [canvas_xy for _, canvas_xy in close_rink_points],
-                        color=(0, 200, 0),
-                    )
 
                 cv2.imshow(rink_window_name, rink_canvas)
 
@@ -517,6 +418,9 @@ def main():
                     (0, 200, 0),
                     2,
                 )
+
+            # Checks if players cross finish line
+            # (Should move this code)
             if finish_line is not None:
                 start_pt = tuple(int(v) for v in finish_line[0])
                 end_pt = tuple(int(v) for v in finish_line[1])
@@ -562,7 +466,9 @@ def main():
                 (0, 255, 255),
                 2,
             )
+
             # Lap counting GUI logic
+            # (Should be moved)
             lap_rows = tracker.get_active_lap_counts()
             lap_panel_key = (
                 finish_line is not None,
@@ -607,7 +513,7 @@ def main():
             close_subtitle = None
             if latest_close_frame is None:
                 close_subtitle = "No close frame"
-            elif homography is not None and synced_close_item is None:
+            elif close_rink_h is not None and synced_close_item is None:
                 close_subtitle = "Unsynced preview"
 
             # Builds the two windows (rink and two cam feeds)

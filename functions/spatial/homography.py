@@ -30,6 +30,35 @@ def load_homography(path: str) -> Homography:
         target_role=str(direction.get("target_role", "wide")),
     )
 
+def load_wide_homography(path: str) -> Homography:
+    try:
+        wide_h = load_homography(path)
+        if wide_h.source_role != "wide" or wide_h.target_role != "rink":
+            raise RuntimeError(
+                f"Wide rink homography must map wide -> rink, got {wide_h.source_role} -> {wide_h.target_role}."
+            )
+        print("Loaded wide->rink homography.")
+    except FileNotFoundError:
+        wide_h = None
+        print("Wide rink homography missing, rink view will omit wide points.")
+
+    return wide_h
+
+
+def load_close_homography(path: str) -> Homography:
+    try:
+        close_h = load_homography(path)
+        if close_h.source_role != "close" or close_h.target_role != "rink":
+            raise RuntimeError(
+                f"Close rink homography must map close -> rink, got {close_h.source_role} -> {close_h.target_role}."
+            )
+        print("Loaded close->rink homography.")
+    except FileNotFoundError:
+        close_h = None
+        print("Close rink homography missing, rink view will omit close points.")
+
+    return close_h
+
 
 def project_point(homography: Homography, x: float, y: float) -> tuple[float, float] | None:
     """
