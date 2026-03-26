@@ -9,6 +9,8 @@ import supervision as sv
 
 from collections import deque
 
+from sympy.physics.units.definitions.unit_definitions import franklin
+
 from functions.tracking.close_association import bbox_top_center_xyxy, match_close_helmets_to_people
 from functions.tracking.cross_camera_transfer import (
     build_close_to_wide_mapping,
@@ -33,6 +35,8 @@ from functions.visualization.visualization import (
     draw_finish_line_overlay,
     draw_match_lines,
     get_screen_size,
+    draw_roi_lines,
+    setup_windows,
 )
 from hardware_detector import HardwareDetector
 from pipeline.async_pipeline import AsyncFramePipeline
@@ -132,17 +136,14 @@ def main():
         finish_line_path=FINISH_LINE_PATH,
     )
 
-    # Create the windows and their layout
-    # This is based on the screem specifications gathered earlier.
-    cv2.namedWindow(multi_cam_window_name, cv2.WINDOW_NORMAL)
-    cv2.resizeWindow(multi_cam_window_name, display_panel_size[0] * 2, display_panel_size[1])
-    cv2.moveWindow(multi_cam_window_name, *window_layout["multi_cam_pos"])
-    cv2.namedWindow(lap_window_name, cv2.WINDOW_NORMAL)
-    cv2.resizeWindow(lap_window_name, lap_panel_width, lap_panel_height)
-    cv2.moveWindow(lap_window_name, *window_layout["lap_pos"])
-    cv2.namedWindow(rink_window_name, cv2.WINDOW_NORMAL)
-    cv2.resizeWindow(rink_window_name, *rink_canvas_size)
-    cv2.moveWindow(rink_window_name, *window_layout["rink_pos"])
+    # Create the windows and their layout.
+    # They are based on the users screen size.
+    setup_windows(
+        window_layout,
+        multi_cam_name=multi_cam_window_name,
+        lap_name=lap_window_name,
+        rink_name=rink_window_name,
+    )
 
     # Loads the saved close ROIs if it find any from CLOSE_YOLO_ROI_PATH and CLOSE_OCR_ROI_PATH
     # Else it prompts the user to draw ROIs for the missing ROIs.
@@ -213,9 +214,9 @@ def main():
         paused=False,
     )
 
-    prev_frame_time = None
-    fps_ema = 0.0
-    frame_count = 0
+    prev_frame_time = None  # Timestamp of previous frame (Used for instant FPS)
+    fps_ema = 0.0           # Exponential moving average (used for seeing a more stable FPS on display)
+    frame_count = 0         # Current frame count (mostly for debug and logging)
 
     last_display_frame = None
     close_sync_misses = 0
@@ -225,6 +226,7 @@ def main():
 
     print("Controls: Esc=quit, Space=pause/resume, r/o=wide ROIs, c/v=close ROIs")
 
+    # Main Loop
     try:
         while True:
             # Pause logic (With Space Bar)
@@ -364,6 +366,7 @@ def main():
                         thickness=2,
                     )
 
+                    # Maps players from close to wide camera through the virtual rink
                     close_to_wide_tid = build_close_to_wide_mapping(
                         tracker.people_tracks,
                         close_people,
@@ -372,6 +375,7 @@ def main():
                         img_shape=frame.shape,
                         max_dist=RINK_MATCH_MAX_DIST,
                     )
+                    # Then we extract only the helmets that has been connected to people tracks across screens
                     helmet_crops = build_helmet_crops_for_wide_ids(
                         close_helmets,
                         close_frame,
@@ -380,6 +384,7 @@ def main():
                     )
 
                 # Give associated helmet crops to the ocr_worker
+                # The ocr_worker will then perform ocr on the crops.
                 for h in helmet_crops:
                     ocr_worker.submit(h)
 
@@ -388,7 +393,7 @@ def main():
             tracker.check_for_ocr(helmets_res) # Includes all voting logic.
 
             # Annotate frames
-            annotated = tracker.annotate(frame)
+            annotated_frame = tracker.annotate(frame)
 
             # Creates the Rink-Space window
             # This is used as a canvas for points representing people tracks on both cams
@@ -411,34 +416,23 @@ def main():
 
                 cv2.imshow(rink_window_name, rink_canvas)
 
-            if yolo_roi is not None:
-                cv2.polylines(
-                    annotated,
-                    [np.array(yolo_roi, dtype=np.int32)],
-                    True,
-                    (0, 255, 255),
-                    2,
-                )
-            if ocr_roi is not None:
-                cv2.polylines(
-                    annotated,
-                    [np.array(ocr_roi, dtype=np.int32)],
-                    True,
-                    (0, 200, 0),
-                    2,
-                )
+            # Draws the wide camera ROIs onto the annotated frame.
+            draw_roi_lines(annotated_frame, yolo_roi, ocr_roi)
 
             # Draw finish line
             if finish_line is not None:
-                draw_finish_line_overlay(annotated, finish_line)
+                draw_finish_line_overlay(annotated_frame, finish_line)
 
+            # Calculate FPS
             now = time.perf_counter()
+            prev_frame_time = now
             if prev_frame_time is not None:
                 elapsed = now - prev_frame_time
                 if elapsed > 0:
+                    # Instantaneous fps
                     fps_inst = 1.0 / elapsed
+                    # Exponential Moving Average FPS
                     fps_ema = fps_inst if fps_ema <= 0 else (0.9 * fps_ema + 0.1 * fps_inst)
-            prev_frame_time = now
 
             if ocr_bench.should_log(now):
                 stats = ocr_worker.get_stats()
@@ -446,7 +440,7 @@ def main():
 
             fps_text = f"FPS: {fps_ema:.1f}" if fps_ema > 0 else "FPS: --"
             cv2.putText(
-                annotated,
+                annotated_frame,
                 fps_text,
                 (10, 30),
                 cv2.FONT_HERSHEY_SIMPLEX,
@@ -468,24 +462,11 @@ def main():
             if lap_panel_state.panel is not None:
                 cv2.imshow(lap_window_name, lap_panel_state.panel)
 
+            # Fallback for when we don't have a synced close frame.
             if close_vis is None and latest_close_frame is not None:
                 close_vis = latest_close_frame.copy()
-            if close_vis is not None and close_yolo_roi is not None:
-                cv2.polylines(
-                    close_vis,
-                    [np.array(close_yolo_roi, dtype=np.int32)],
-                    True,
-                    (0, 255, 255),
-                    2,
-                )
-            if close_vis is not None and close_ocr_roi is not None:
-                cv2.polylines(
-                    close_vis,
-                    [np.array(close_ocr_roi, dtype=np.int32)],
-                    True,
-                    (0, 200, 0),
-                    2,
-                )
+            # Draws the ROI lines onto the close camera frame.
+            draw_roi_lines(close_vis, close_yolo_roi, close_ocr_roi)
 
             close_subtitle = None
             if latest_close_frame is None:
@@ -496,7 +477,7 @@ def main():
             # Builds the two windows (rink and two cam feeds)
             # Makes them the correct size based on screen size.
             display_frame = compose_display_canvas(
-                annotated,
+                annotated_frame,
                 close_vis,
                 display_panel_size,
                 wide_subtitle=fps_text,

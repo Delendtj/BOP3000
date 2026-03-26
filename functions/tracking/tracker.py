@@ -46,7 +46,7 @@ def bbox_iou(box_a, box_b):
 
 
 class Tracker:
-    def __init__(self, ocr_votes_count, conf_threshold, roi, frame_rate=30.0, finish_line=None, total_laps=None):
+    def __init__(self, ocr_votes_count, conf_threshold, roi, frame_rate=30.0, finish_line=None, total_laps=None, accepted_numbers=None):
         self.frame_rate = float(frame_rate) if float(frame_rate) > 0 else 30.0
 
         # Tuned ByteTrack settings for steadier helmet/person IDs.
@@ -78,6 +78,8 @@ class Tracker:
 
         self.person_class_id = 1
         self.helmet_class_id = 0
+
+        self.accepted_numbers = accepted_numbers
 
         self.person_frame_index = 0
         self.next_person_canonical_id = 1
@@ -366,3 +368,12 @@ class Tracker:
             annotated = self.label_annotator.annotate(annotated, self.helmet_tracks, labels=labels)
 
         return annotated
+
+    def match_partial(self, partial):
+        # Needs to be longer than 2
+        if len(partial) < 2:
+            return None
+        # Loops over accepted numbers and keep those where partial is a substring of n.
+        candidates = [n for n in self.accepted_numbers if partial in n]
+        # If the candidate is only one then we return it. Else it's too ambiguous.
+        return candidates[0] if len(candidates) == 1 else None

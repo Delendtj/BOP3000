@@ -18,6 +18,24 @@ def draw_bboxes(frame, detections, color, thickness=2):
         x1, y1, x2, y2 = map(int, bbox)
         cv2.rectangle(frame, (x1, y1), (x2, y2), color, thickness)
 
+def draw_roi_lines(frame, yolo_roi, ocr_roi):
+    if frame is None: return
+    if yolo_roi is not None:
+        cv2.polylines(
+            frame,
+            [np.array(yolo_roi, dtype=np.int32)],
+            True,
+            (0, 255, 255),
+            2,
+        )
+    if ocr_roi is not None:
+        cv2.polylines(
+            frame,
+            [np.array(ocr_roi, dtype=np.int32)],
+            True,
+            (0, 200, 0),
+            2,
+        )
 
 def draw_match_lines(frame, detections_a, detections_b, matches, get_point_a, get_point_b, color, thickness=2):
     if frame is None or not matches:
@@ -197,3 +215,21 @@ def compute_window_layout(screen_width, screen_height):
         "lap_pos": (padding, padding),
         "rink_pos": (lap_width + (padding * 2), padding + top_height + window_gap),
     }
+
+
+def setup_windows(window_layout, *, multi_cam_name, lap_name, rink_name):
+    display_panel_size = window_layout["display_panel_size"]
+    rink_canvas_size = window_layout["rink_canvas_size"]
+    lap_panel_width, lap_panel_height = window_layout["lap_panel_size"]
+
+    cv2.namedWindow(multi_cam_name, cv2.WINDOW_NORMAL)
+    cv2.resizeWindow(multi_cam_name, display_panel_size[0] * 2, display_panel_size[1])
+    cv2.moveWindow(multi_cam_name, *window_layout["multi_cam_pos"])
+
+    cv2.namedWindow(lap_name, cv2.WINDOW_NORMAL)
+    cv2.resizeWindow(lap_name, lap_panel_width, lap_panel_height)
+    cv2.moveWindow(lap_name, *window_layout["lap_pos"])
+
+    cv2.namedWindow(rink_name, cv2.WINDOW_NORMAL)
+    cv2.resizeWindow(rink_name, *rink_canvas_size)
+    cv2.moveWindow(rink_name, *window_layout["rink_pos"])
