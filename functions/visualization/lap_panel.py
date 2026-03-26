@@ -1,8 +1,15 @@
+from dataclasses import dataclass
 from tkinter import simpledialog
 
 import cv2
 import numpy as np
 import tkinter as tk
+
+
+@dataclass
+class LapPanelState:
+    panel: np.ndarray | None = None
+    key: tuple | None = None
 
 def render_lap_panel(height, width, lap_rows, finish_line_ready, total_laps):
     # Render the current lap summary into the separate lap-counter window.
@@ -112,6 +119,30 @@ def render_lap_panel(height, width, lap_rows, finish_line_ready, total_laps):
             break
 
     return panel
+
+
+def update_lap_panel_state(state: LapPanelState, *, tracker, finish_line, height: int, width: int) -> LapPanelState:
+    lap_rows = tracker.get_active_lap_counts()
+    panel_key = (
+        finish_line is not None,
+        int(tracker.total_laps),
+        tuple(
+            (row["track_id"], row["lap_count"], row["predicted"])
+            for row in lap_rows
+        ),
+    )
+
+    if panel_key != state.key:
+        state.panel = render_lap_panel(
+            height,
+            width,
+            lap_rows,
+            finish_line is not None,
+            tracker.total_laps,
+        )
+        state.key = panel_key
+
+    return state
 
 def prompt_total_laps():
     root = tk.Tk()

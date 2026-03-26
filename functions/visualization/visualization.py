@@ -48,6 +48,34 @@ def draw_rink_match_lines(frame, matches, points_a, points_b, color, thickness=2
             cv2.line(frame, (int(ax), int(ay)), (int(bx), int(by)), color, thickness)
 
 
+def draw_finish_line_overlay(frame, finish_line):
+    if frame is None or finish_line is None:
+        return
+
+    start_pt = tuple(int(v) for v in finish_line[0])
+    end_pt = tuple(int(v) for v in finish_line[1])
+    cv2.line(frame, start_pt, end_pt, (0, 165, 255), 3)
+    cv2.circle(frame, start_pt, 6, (0, 255, 255), -1)
+    cv2.circle(frame, end_pt, 6, (0, 140, 255), -1)
+
+    label_x = int((start_pt[0] + end_pt[0]) / 2)
+    label_y = int((start_pt[1] + end_pt[1]) / 2) - 10
+    frame_height, frame_width = frame.shape[:2]
+    arrow_y = max(30, label_y - 22)
+    arrow_start = (max(15, label_x - 50), arrow_y)
+    arrow_end = (min(frame_width - 15, label_x + 50), arrow_y)
+    cv2.arrowedLine(frame, arrow_start, arrow_end, (0, 165, 255), 3, tipLength=0.2)
+    cv2.putText(
+        frame,
+        "FINISH L->R",
+        (label_x, label_y),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.7,
+        (0, 165, 255),
+        2,
+    )
+
+
 def build_rink_canvas(
     bounds: tuple[float, float, float, float],
     canvas_size: tuple[int, int],

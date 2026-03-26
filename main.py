@@ -18,21 +18,19 @@ from functions.detection.roi_inference import keep_detections_inside_roi, shift_
 from functions.detection.close_inference import run_close_inference
 from functions.ocr.ocr_worker import OCRWorker
 from functions.spatial.homography import select_close_frame, load_close_homography, load_wide_homography
-from functions.visualization.lap_panel import render_lap_panel, prompt_total_laps
-from functions.spatial.roi.io import save_line, save_roi
-from functions.spatial.roi.selection import select_line, select_roi
+from functions.system.controls import KeyboardControlState, handle_keypress
+from functions.visualization.lap_panel import LapPanelState, prompt_total_laps, update_lap_panel_state
 from functions.spatial.roi.setup import (
     load_or_select_close_rois,
     load_or_select_wide_rois,
-    select_ocr_roi_inside_yolo,
 )
-from functions.spatial.roi.validation import roi_inside_roi, validate_finish_line
 from functions.tracking.tracker import Tracker
 from functions.visualization.rink_view import build_rink_view
 from functions.visualization.visualization import (
     compose_display_canvas,
     compute_window_layout,
     draw_bboxes,
+    draw_finish_line_overlay,
     draw_match_lines,
     get_screen_size,
 )
@@ -204,22 +202,33 @@ def main():
     # Section for initializing benchmark classes here:
     ocr_bench = OCRThroughputStats(log_every_sec=2.0)
 
+    # Handles all keyboard state changes
+    # for the different modules (yolo_roi, ocr_roi etc...)
+    keyboard_state = KeyboardControlState(
+        yolo_roi=yolo_roi,
+        ocr_roi=ocr_roi,
+        finish_line=finish_line,
+        close_yolo_roi=close_yolo_roi,
+        close_ocr_roi=close_ocr_roi,
+        paused=False,
+    )
+
     prev_frame_time = None
     fps_ema = 0.0
     frame_count = 0
-    paused = False
+
     last_display_frame = None
-    last_lap_panel = None
-    last_lap_panel_key = None
     close_sync_misses = 0
     last_close_sync_log = 0.0
+
+    lap_panel_state = LapPanelState()
 
     print("Controls: Esc=quit, Space=pause/resume, r/o=wide ROIs, c/v=close ROIs")
 
     try:
         while True:
             # Pause logic (With Space Bar)
-            if paused and last_display_frame is not None:
+            if keyboard_state.paused and last_display_frame is not None:
                 paused_frame = last_display_frame.copy()
                 cv2.putText(
                     paused_frame,
@@ -231,13 +240,13 @@ def main():
                     2,
                 )
                 cv2.imshow(multi_cam_window_name, paused_frame)
-                if last_lap_panel is not None:
-                    cv2.imshow(lap_window_name, last_lap_panel)
+                if lap_panel_state.panel is not None:
+                    cv2.imshow(lap_window_name, lap_panel_state.panel)
                 key = cv2.waitKey(30) & 0xFF
                 if key == 27:
                     break
                 if key == ord(" "):
-                    paused = False
+                    keyboard_state.paused = False
                 continue
 
             # Read frames from close camera (From Asyncpipeline queue)
@@ -419,30 +428,9 @@ def main():
                     2,
                 )
 
-            # Checks if players cross finish line
-            # (Should move this code)
+            # Draw finish line
             if finish_line is not None:
-                start_pt = tuple(int(v) for v in finish_line[0])
-                end_pt = tuple(int(v) for v in finish_line[1])
-                cv2.line(annotated, start_pt, end_pt, (0, 165, 255), 3)
-                cv2.circle(annotated, start_pt, 6, (0, 255, 255), -1)
-                cv2.circle(annotated, end_pt, 6, (0, 140, 255), -1)
-                label_x = int((start_pt[0] + end_pt[0]) / 2)
-                label_y = int((start_pt[1] + end_pt[1]) / 2) - 10
-                frame_height, frame_width = annotated.shape[:2]
-                arrow_y = max(30, label_y - 22)
-                arrow_start = (max(15, label_x - 50), arrow_y)
-                arrow_end = (min(frame_width - 15, label_x + 50), arrow_y)
-                cv2.arrowedLine(annotated, arrow_start, arrow_end, (0, 165, 255), 3, tipLength=0.2)
-                cv2.putText(
-                    annotated,
-                    "FINISH L->R",
-                    (label_x, label_y),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.7,
-                    (0, 165, 255),
-                    2,
-                )
+                draw_finish_line_overlay(annotated, finish_line)
 
             now = time.perf_counter()
             if prev_frame_time is not None:
@@ -467,29 +455,18 @@ def main():
                 2,
             )
 
-            # Lap counting GUI logic
-            # (Should be moved)
-            lap_rows = tracker.get_active_lap_counts()
-            lap_panel_key = (
-                finish_line is not None,
-                int(tracker.total_laps),
-                tuple(
-                    (row["track_id"], row["lap_count"], row["predicted"])
-                    for row in lap_rows
-                ),
+            # Update the lap_panel
+            lap_panel_state = update_lap_panel_state(
+                lap_panel_state,
+                tracker=tracker,
+                finish_line=finish_line,
+                height=lap_panel_height,
+                width=lap_panel_width,
             )
-            if lap_panel_key != last_lap_panel_key:
-                last_lap_panel = render_lap_panel(
-                    lap_panel_height,
-                    lap_panel_width,
-                    lap_rows,
-                    finish_line is not None,
-                    tracker.total_laps,
-                )
-                last_lap_panel_key = lap_panel_key
 
-            if last_lap_panel is not None:
-                cv2.imshow(lap_window_name, last_lap_panel)
+            # Rerender lap_panel
+            if lap_panel_state.panel is not None:
+                cv2.imshow(lap_window_name, lap_panel_state.panel)
 
             if close_vis is None and latest_close_frame is not None:
                 close_vis = latest_close_frame.copy()
@@ -528,75 +505,36 @@ def main():
             last_display_frame = display_frame
             cv2.imshow(multi_cam_window_name, display_frame)
 
-            # [THis whole block should be placed somewhere else]
+            # Get the current keypress
             key = cv2.waitKey(1) & 0xFF
-            if key == 27:
+            # handle_keypress() then handles the keypress
+            # and returns results based on what key is pressed.
+            key_result = handle_keypress(
+                key=key,
+                state=keyboard_state,
+                tracker=tracker,
+                pipeline=pipeline,
+                pipeline_close=pipeline_close,
+                frame=frame,
+                close_preview_frame=close_preview_frame,
+                yolo_roi_path=YOLO_ROI_PATH,
+                ocr_roi_path=OCR_ROI_PATH,
+                close_yolo_roi_path=CLOSE_YOLO_ROI_PATH,
+                close_ocr_roi_path=CLOSE_OCR_ROI_PATH,
+                finish_line_path=FINISH_LINE_PATH,
+            )
+
+            # Give new state to the keyboard_state controller.
+            keyboard_state = key_result.state
+            yolo_roi = keyboard_state.yolo_roi
+            ocr_roi = keyboard_state.ocr_roi
+            finish_line = keyboard_state.finish_line
+            close_yolo_roi = keyboard_state.close_yolo_roi
+            close_ocr_roi = keyboard_state.close_ocr_roi
+            if key_result.should_quit:
                 break
-            if key == ord(" "):
-                paused = True
+            if keyboard_state.paused:
                 continue
-            if key == ord("r"):
-                new_yolo_roi = select_roi(frame, window_name="YOLO ROI Selector")
-                if new_yolo_roi is not None:
-                    yolo_roi = new_yolo_roi
-                    pipeline.set_inference_roi(yolo_roi)
-                    save_roi(YOLO_ROI_PATH, yolo_roi)
-                    if ocr_roi is not None and not roi_inside_roi(ocr_roi, yolo_roi):
-                        print("Current OCR ROI is outside updated YOLO ROI. Press 'o' to redraw OCR ROI.")
-                        ocr_roi = None
-                        tracker.set_roi(None)
-                    finish_line_error = validate_finish_line(finish_line, frame_shape=frame.shape, roi=yolo_roi)
-                    if finish_line_error is not None:
-                        print(f"Current finish line was cleared: {finish_line_error}")
-                        finish_line = None
-                        tracker.set_finish_line(None)
-            if key == ord("o"):
-                if yolo_roi is None:
-                    print("Define YOLO ROI first (press 'r').")
-                else:
-                    new_ocr_roi = select_ocr_roi_inside_yolo(frame, yolo_roi)
-                    if new_ocr_roi is not None:
-                        ocr_roi = new_ocr_roi
-                        tracker.set_roi(ocr_roi)
-                        save_roi(OCR_ROI_PATH, ocr_roi)
-            if key == ord("f"):
-                new_finish_line = select_line(frame, window_name="Finish Line Selector")
-                if new_finish_line is not None:
-                    finish_line_error = validate_finish_line(
-                        new_finish_line,
-                        frame_shape=frame.shape,
-                        roi=yolo_roi,
-                    )
-                    if finish_line_error is not None:
-                        print(f"Finish line not saved: {finish_line_error}")
-                    else:
-                        line_changed = new_finish_line != finish_line
-                        finish_line = new_finish_line
-                        tracker.set_finish_line(finish_line)
-                        if line_changed:
-                            print("Finish line updated. Lap counts reset.")
-                        save_line(FINISH_LINE_PATH, finish_line)
-                        save_roi(OCR_ROI_PATH, ocr_roi)
-            if key == ord("c"):
-                if close_yolo_roi is None:
-                    close_yolo_roi = select_roi(close_preview_frame, window_name="Close YOLO ROI Selector")
-                    if close_yolo_roi is not None:
-                        save_roi(CLOSE_YOLO_ROI_PATH, close_yolo_roi)
-                        pipeline_close.set_inference_roi(close_yolo_roi)
-                else:
-                    new_close_yolo = select_roi(close_preview_frame, window_name="Close YOLO ROI Selector")
-                    if new_close_yolo is not None:
-                        close_yolo_roi = new_close_yolo
-                        save_roi(CLOSE_YOLO_ROI_PATH, close_yolo_roi)
-                        pipeline_close.set_inference_roi(close_yolo_roi)
-            if key == ord("v"):
-                if close_yolo_roi is None:
-                    print("Define close YOLO ROI first (press 'c').")
-                else:
-                    new_close_ocr = select_ocr_roi_inside_yolo(close_preview_frame, close_yolo_roi)
-                    if new_close_ocr is not None:
-                        close_ocr_roi = new_close_ocr
-                        save_roi(CLOSE_OCR_ROI_PATH, close_ocr_roi)
     finally:
         ocr_worker.stop()
         pipeline.stop()
