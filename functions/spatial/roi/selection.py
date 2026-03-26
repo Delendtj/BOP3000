@@ -3,6 +3,10 @@ import numpy as np
 
 
 def select_roi(frame, window_name="ROI Selector"):
+    """
+    Takes in frame to draw the ROI on.
+    Creates and shows the window where the user can draw the ROI.
+    """
     if frame is None:
         return None
 
@@ -39,17 +43,17 @@ def select_roi(frame, window_name="ROI Selector"):
         cv2.imshow(window_name, canvas)
         key = cv2.waitKey(10) & 0xFF
 
-        if key in (13, 10):
+        if key in (13, 10): # Enter (confirm current points)
             if len(points) >= 3:
                 cv2.destroyWindow(window_name)
                 return points
-        elif key == 27:
+        elif key == 27: # Escape (cancel)
             cv2.destroyWindow(window_name)
             return None
-        elif key in (ord("u"), ord("U"), 8):
+        elif key in (ord("u"), ord("U"), 8): # u/U or Backspace (go back one)
             if points:
                 points.pop()
-        elif key in (ord("c"), ord("C")):
+        elif key in (ord("c"), ord("C")): # c/C (clear all points)
             points.clear()
 
 

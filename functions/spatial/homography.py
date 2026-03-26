@@ -32,6 +32,9 @@ def load_homography(path: str) -> Homography:
 
 
 def project_point(homography: Homography, x: float, y: float) -> tuple[float, float] | None:
+    """
+    Project point (x,y) into where homography points to.
+    """
     vec = np.array([x, y, 1.0], dtype=np.float32)
     projected = homography.matrix @ vec
     if projected[2] == 0:

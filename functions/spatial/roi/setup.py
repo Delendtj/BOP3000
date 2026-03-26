@@ -1,5 +1,5 @@
-from functions.spatial.roi.io import load_line, load_roi, save_line, save_roi
-from functions.spatial.roi.selection import select_line, select_roi
+from functions.spatial.roi.io import load_line, load_roi, save_roi
+from functions.spatial.roi.selection import select_roi
 from functions.spatial.roi.validation import roi_inside_roi, validate_finish_line
 
 

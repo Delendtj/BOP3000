@@ -76,9 +76,24 @@ CLOSE_HELMET_PERSON_MAX_BELOW_RATIO = 0.08
 HELMET_CLASS_ID = 0
 PERSON_CLASS_ID = 1
 SYNC_MISS_LOG_INTERVAL = 2.0
-HOMOGRAPHY_PATH = os.path.join("img", "homography.json")
-RINK_WIDE_H_PATH = os.path.join("img", "homography_wide.json")
-RINK_CLOSE_H_PATH = os.path.join("img", "homography_close.json")
+
+HOMOGRAPHY_PATH = os.path.join("data", "homography.json")
+RINK_WIDE_H_PATH = os.path.join("data", "homography_wide.json")
+RINK_CLOSE_H_PATH = os.path.join("data", "homography_close.json")
+FINISH_LINE_PATH = os.path.join("data", "finish_line.json")
+YOLO_ROI_PATH = os.path.join("data", "yolo_roi.json")
+OCR_ROI_PATH = os.path.join("data", "ocr_roi.json")
+CLOSE_YOLO_ROI_PATH = os.path.join("data", "close_yolo_roi.json")
+CLOSE_OCR_ROI_PATH = os.path.join("data", "close_ocr_roi.json")
+
+# IIHF 60m x 30m rink -> half-extents: x in [-15, 15], y in [-30, 30]
+RINK_BOUNDS = (-15.0, 15.0, -30.0, 30.0)
+RINK_GOAL_LINE_OFFSET = 26.0
+RINK_RED_LINES = (0.0, -RINK_GOAL_LINE_OFFSET, RINK_GOAL_LINE_OFFSET)
+RINK_MATCH_MAX_DIST = 1.5
+multi_cam_window_name = "Multi-cam view"
+rink_window_name = "Rink view"
+lap_window_name = "Lap Count"
 
 INFERENCE_CONFIG = {
     'conf': CONF_THRESHOLD,
@@ -89,21 +104,6 @@ INFERENCE_CONFIG = {
     'device': None, # Same here
     'verbose': False,
 }
-
-finish_line_path = os.path.join("data", "finish_line.json")
-YOLO_ROI_PATH = os.path.join("img", "yolo_roi.json")
-OCR_ROI_PATH = os.path.join("img", "ocr_roi.json")
-CLOSE_YOLO_ROI_PATH = os.path.join("img", "close_yolo_roi.json")
-CLOSE_OCR_ROI_PATH = os.path.join("img", "close_ocr_roi.json")
-# IIHF 60m x 30m rink -> half-extents: x in [-15, 15], y in [-30, 30]
-RINK_BOUNDS = (-15.0, 15.0, -30.0, 30.0)
-RINK_GOAL_LINE_OFFSET = 26.0
-RINK_RED_LINES = (0.0, -RINK_GOAL_LINE_OFFSET, RINK_GOAL_LINE_OFFSET)
-RINK_MATCH_MAX_DIST = 1.5
-multi_cam_window_name = "Multi-cam view"
-rink_window_name = "Rink view"
-lap_window_name = "Lap Count"
-
 
 def main():
     detector = HardwareDetector(config)
@@ -144,7 +144,7 @@ def main():
         preview_frame=preview_frame,
         yolo_roi_path=YOLO_ROI_PATH,
         ocr_roi_path=OCR_ROI_PATH,
-        finish_line_path=finish_line_path,
+        finish_line_path=FINISH_LINE_PATH,
     )
 
     # Create the windows and their layout
@@ -159,6 +159,8 @@ def main():
     cv2.resizeWindow(rink_window_name, *rink_canvas_size)
     cv2.moveWindow(rink_window_name, *window_layout["rink_pos"])
 
+    # Loads the saved close ROIs if it find any from CLOSE_YOLO_ROI_PATH and CLOSE_OCR_ROI_PATH
+    # Else it prompts the user to draw ROIs for the missing ROIs.
     close_yolo_roi, close_ocr_roi = load_or_select_close_rois(
         close_preview_frame=close_preview_frame,
         close_yolo_roi_path=CLOSE_YOLO_ROI_PATH,
@@ -175,7 +177,8 @@ def main():
         total_laps=total_laps,
     )
 
-    # Initialize threads and processes
+    # [SECTION] Initialize processes and threads.
+
     # WIDE Source
     pipeline = AsyncFramePipeline(
         source=WIDE_SOURCE,
@@ -190,8 +193,8 @@ def main():
         queue_size=3,
         inference_roi=close_yolo_roi,
     )
-
     # Create worker process for OCR
+
     # Start both the async-pipelines (threads) and worker process
     ocr_worker = OCRWorker()
     ocr_worker.start()
@@ -200,6 +203,8 @@ def main():
 
     close_buffer = deque(maxlen=32)
     latest_close_item = None
+
+    # [SECTION] Homography (usually referred to as 'h')
 
     # Load/Check Homography
     # The homography is used to project points into virtual rink space.
@@ -215,6 +220,7 @@ def main():
     except FileNotFoundError:
         homography = None
         print("Homography missing, cross-camera crops disabled.")
+
 
     try:
         wide_rink_h = load_homography(RINK_WIDE_H_PATH)
@@ -392,6 +398,8 @@ def main():
                         thickness=2,
                     )
 
+
+                    # (I believe this is Legacy code)
                     # Visualize homography on wide frame (project close -> wide).
                     if len(close_helmets) > 0:
                         for bbox in close_helmets.xyxy:
@@ -661,7 +669,7 @@ def main():
                         tracker.set_finish_line(finish_line)
                         if line_changed:
                             print("Finish line updated. Lap counts reset.")
-                        save_line(finish_line_path, finish_line)
+                        save_line(FINISH_LINE_PATH, finish_line)
                         save_roi(OCR_ROI_PATH, ocr_roi)
             if key == ord("c"):
                 if close_yolo_roi is None:
