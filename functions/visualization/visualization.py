@@ -3,6 +3,7 @@ from __future__ import annotations
 import cv2
 import numpy as np
 import tkinter as tk
+import screeninfo
 
 from functions.spatial.rink_projection import rink_to_canvas
 
@@ -135,12 +136,17 @@ def compose_display_canvas(wide_frame, close_frame, panel_size, wide_subtitle=No
 def get_screen_size():
     root = tk.Tk()
     root.withdraw()
-    try:
-        root.update_idletasks()
-        return root.winfo_screenwidth(), root.winfo_screenheight()
-    finally:
-        root.destroy()
+    current_screen = get_monitor_from_coord(root.winfo_x(), root.winfo_y())
 
+    return current_screen.width, current_screen.height
+
+def get_monitor_from_coord(x, y):
+    monitors = screeninfo.get_monitors()
+
+    for m in reversed(monitors):
+        if m.x <= x <= m.width + m.x and m.y <= y <= m.height + m.y:
+            return m
+    return monitors[0]
 
 def _clamp(value, minimum, maximum):
     return max(minimum, min(int(value), maximum))

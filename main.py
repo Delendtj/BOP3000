@@ -3,8 +3,6 @@ from multiprocessing.spawn import freeze_support
 import cv2
 import os
 import time
-import tkinter as tk
-from tkinter import simpledialog
 
 import numpy as np
 import supervision as sv
@@ -28,18 +26,16 @@ from functions.tracking.association import (
 )
 from functions.detection.close_inference import run_close_inference
 from functions.spatial.rink_projection import project_bboxes_to_rink_canvas
-from functions.visualization.lap_panel import render_lap_panel
+from functions.visualization.lap_panel import render_lap_panel, prompt_total_laps
 from functions.ocr.ocr_worker import OCRWorker
-from functions.spatial.roi import (
-    load_line,
-    load_roi,
-    roi_inside_roi,
-    save_line,
-    save_roi,
-    select_line,
-    select_roi,
-    validate_finish_line,
+from functions.spatial.roi.io import load_line, load_roi, save_line, save_roi
+from functions.spatial.roi.selection import select_line, select_roi
+from functions.spatial.roi.setup import (
+    load_or_select_close_rois,
+    load_or_select_wide_rois,
+    select_ocr_roi_inside_yolo,
 )
+from functions.spatial.roi.validation import roi_inside_roi, validate_finish_line
 from functions.tracking.assignment import hungarian_assign
 from functions.tracking.tracker import Tracker
 from functions.visualization.visualization import (
@@ -108,41 +104,15 @@ multi_cam_window_name = "Multi-cam view"
 rink_window_name = "Rink view"
 lap_window_name = "Lap Count"
 
-def select_ocr_roi_inside_yolo(frame, yolo_roi):
-    if frame is None or yolo_roi is None:
-        return None
-
-    while True:
-        candidate = select_roi(frame, window_name="OCR ROI Selector")
-        if candidate is None:
-            return None
-        if roi_inside_roi(candidate, yolo_roi):
-            return candidate
-    print("OCR ROI must be inside YOLO ROI. Draw again or press Esc to cancel.")
-
-def prompt_total_laps():
-    root = tk.Tk()
-    root.withdraw()
-    root.attributes("-topmost", True)
-
-    try:
-        while True:
-            total_laps = simpledialog.askinteger(
-                "Race Laps",
-                "Enter total laps for this race:",
-                minvalue=1,
-                parent=root,
-            )
-            if total_laps is not None:
-                return int(total_laps)
-    finally:
-        root.destroy()
 
 def main():
     detector = HardwareDetector(config)
     model = detector.initialize_model()
 
+    # Show prompt for user input (laps)
     total_laps = prompt_total_laps()
+
+    # Gather all screen specifications needed for layout
     screen_width, screen_height = get_screen_size()
     window_layout = compute_window_layout(screen_width, screen_height)
     display_panel_size = window_layout["display_panel_size"]
@@ -168,29 +138,17 @@ def main():
         raise RuntimeError("Could not read initial close frame for ROI.")
 
     # ROI
-    yolo_roi = load_roi(YOLO_ROI_PATH)
-    if yolo_roi is None:
-        yolo_roi = select_roi(preview_frame, window_name="YOLO ROI Selector")
-        if yolo_roi is not None:
-            save_roi(YOLO_ROI_PATH, yolo_roi)
+    # One for checking main model detections (YOLO)
+    # One for running the helmet number (OCR)
+    yolo_roi, ocr_roi, finish_line = load_or_select_wide_rois(
+        preview_frame=preview_frame,
+        yolo_roi_path=YOLO_ROI_PATH,
+        ocr_roi_path=OCR_ROI_PATH,
+        finish_line_path=finish_line_path,
+    )
 
-    ocr_roi = load_roi(OCR_ROI_PATH)
-    if ocr_roi is not None and yolo_roi is not None and not roi_inside_roi(ocr_roi, yolo_roi):
-        print("Loaded OCR ROI is outside YOLO ROI. Please redraw OCR ROI.")
-        ocr_roi = None
-
-    if ocr_roi is None and yolo_roi is not None:
-        selected_ocr = select_ocr_roi_inside_yolo(preview_frame, yolo_roi)
-        if selected_ocr is not None:
-            ocr_roi = selected_ocr
-            save_roi(OCR_ROI_PATH, ocr_roi)
-
-    finish_line = load_line(finish_line_path)
-    finish_line_error = validate_finish_line(finish_line, frame_shape=preview_frame.shape, roi=yolo_roi)
-    if finish_line_error is not None:
-        print(f"Ignoring saved finish line: {finish_line_error}")
-        finish_line = None
-
+    # Create the windows and their layout
+    # This is based on the screem specifications gathered earlier.
     cv2.namedWindow(multi_cam_window_name, cv2.WINDOW_NORMAL)
     cv2.resizeWindow(multi_cam_window_name, display_panel_size[0] * 2, display_panel_size[1])
     cv2.moveWindow(multi_cam_window_name, *window_layout["multi_cam_pos"])
@@ -201,24 +159,13 @@ def main():
     cv2.resizeWindow(rink_window_name, *rink_canvas_size)
     cv2.moveWindow(rink_window_name, *window_layout["rink_pos"])
 
-    close_yolo_roi = load_roi(CLOSE_YOLO_ROI_PATH)
-    if close_yolo_roi is None:
-        close_yolo_roi = select_roi(close_preview_frame, window_name="Close YOLO ROI Selector")
-        if close_yolo_roi is not None:
-            save_roi(CLOSE_YOLO_ROI_PATH, close_yolo_roi)
+    close_yolo_roi, close_ocr_roi = load_or_select_close_rois(
+        close_preview_frame=close_preview_frame,
+        close_yolo_roi_path=CLOSE_YOLO_ROI_PATH,
+        close_ocr_roi_path=CLOSE_OCR_ROI_PATH,
+    )
 
-    close_ocr_roi = load_roi(CLOSE_OCR_ROI_PATH)
-    if close_ocr_roi is not None and close_yolo_roi is not None and not roi_inside_roi(close_ocr_roi, close_yolo_roi):
-        print("Loaded close OCR ROI is outside close YOLO ROI. Please redraw.")
-        close_ocr_roi = None
-
-    if close_ocr_roi is None and close_yolo_roi is not None:
-        selected_close_ocr = select_ocr_roi_inside_yolo(close_preview_frame, close_yolo_roi)
-        if selected_close_ocr is not None:
-            close_ocr_roi = selected_close_ocr
-            save_roi(CLOSE_OCR_ROI_PATH, close_ocr_roi)
-
-    # THE TRACKER
+    # Create the Tracker
     tracker = Tracker(
         OCR_VOTE,
         CONF_THRESHOLD,
@@ -244,6 +191,8 @@ def main():
         inference_roi=close_yolo_roi,
     )
 
+    # Create worker process for OCR
+    # Start both the async-pipelines (threads) and worker process
     ocr_worker = OCRWorker()
     ocr_worker.start()
     pipeline.start()
@@ -253,6 +202,7 @@ def main():
     latest_close_item = None
 
     # Load/Check Homography
+    # The homography is used to project points into virtual rink space.
     try:
         homography = load_homography(HOMOGRAPHY_PATH)
         if homography.source_role != "close" or homography.target_role != "wide":
