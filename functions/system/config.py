@@ -14,14 +14,14 @@ def create_config(path):
     config["Path"] = {
         "WIDE_SOURCE": "../videos/wide_cam.mp4",
         "CLOSE_SOURCE": "../videos/close_cam.mp4",
-        "YOLO_ROI_PATH": os.path.join("../../data", "yolo_roi.json"),
-        "OCR_ROI_PATH": os.path.join("../../data", "ocr_roi.json"),
-        "CLOSE_YOLO_ROI_PATH": os.path.join("../../data", "close_yolo_roi.json"),
-        "CLOSE_OCR_ROI_PATH": os.path.join("../../data", "close_ocr_roi.json"),
-        "HOMOGRAPHY_PATH": os.path.join("../../data", "homography.json"),
-        "RINK_WIDE_H_PATH": os.path.join("../../data", "homography_wide.json"),
-        "RINK_CLOSE_H_PATH": os.path.join("../../data", "homography_close.json"),
-        "FINISH_LINE_PATH": os.path.join("../../data", "finish_line.json"),
+        "YOLO_ROI_PATH": os.path.join("data", "yolo_roi.json"),
+        "OCR_ROI_PATH": os.path.join("data", "ocr_roi.json"),
+        "CLOSE_YOLO_ROI_PATH": os.path.join("data", "close_yolo_roi.json"),
+        "CLOSE_OCR_ROI_PATH": os.path.join("data", "close_ocr_roi.json"),
+        "HOMOGRAPHY_PATH": os.path.join("data", "homography.json"),
+        "RINK_WIDE_H_PATH": os.path.join("data", "homography_wide.json"),
+        "RINK_CLOSE_H_PATH": os.path.join("data", "homography_close.json"),
+        "FINISH_LINE_PATH": os.path.join("data", "finish_line.json"),
     }
 
     config["Model"] = {
@@ -57,7 +57,9 @@ def create_config(path):
     config["Runtime"] = {
         "CONF_THRESHOLD": str(CONF_THRESHOLD),
         "FRAME_SKIP": "1",
-        "OCR_VOTE": "3"  # collect votes for N frames before deciding
+        "OCR_VOTE": "3",  # collect votes for N frames before deciding
+        "CLOSE_HELMET_PERSON_MAX_DIST": "80",
+        "CLOSE_HELMET_PERSON_MAX_BELOW_RATIO": "0.08",
     }
 
     RINK_GOAL_LINE_OFFSET = 26
@@ -130,6 +132,8 @@ def load_config(path):
             "CONF_THRESHOLD": config.getfloat("Runtime", "CONF_THRESHOLD"),
             "FRAME_SKIP": config.getint("Runtime", "FRAME_SKIP"),
             "OCR_VOTE": config.getint("Runtime", "OCR_VOTE"),
+            "CLOSE_HELMET_PERSON_MAX_DIST": config.getfloat("Runtime", "CLOSE_HELMET_PERSON_MAX_DIST"),
+            "CLOSE_HELMET_PERSON_MAX_BELOW_RATIO": config.getfloat("Runtime", "CLOSE_HELMET_PERSON_MAX_BELOW_RATIO"),
         },
         "Rink": {
             "RINK_BOUNDS": _parse_csv_floats(config["Rink"]["RINK_BOUNDS"]),

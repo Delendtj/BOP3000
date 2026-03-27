@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import cv2
 
 from functions.spatial.roi.io import save_line, save_roi
 from functions.spatial.roi.selection import select_line, select_roi
@@ -22,6 +23,32 @@ class KeyboardControlState:
 class KeyboardControlResult:
     state: KeyboardControlState
     should_quit: bool = False
+
+
+@dataclass
+class PauseResult:
+    should_quit: bool = False
+    should_resume: bool = False
+
+
+def pause(last_frame, window_name: str) -> PauseResult:
+    paused_frame = last_frame.copy()
+    cv2.putText(
+        paused_frame,
+        "PAUSED (Space to resume)",
+        (10, 70),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.8,
+        (0, 255, 255),
+        2,
+    )
+    cv2.imshow(window_name, paused_frame)
+    key = cv2.waitKey(30) & 0xFF
+    if key == 27:
+        return PauseResult(should_quit=True)
+    if key == ord(" "):
+        return PauseResult(should_resume=True)
+    return PauseResult()
 
 
 def handle_keypress(

@@ -1,33 +1,35 @@
+# Core
+from collections import deque
 from multiprocessing.spawn import freeze_support
-
-import cv2
 import os
 import time
 
+# Dependencies
+import cv2
 import supervision as sv
 
-from collections import deque
+# Own libraries
+from hardware_detector import HardwareDetector
+from pipeline.async_pipeline import AsyncFramePipeline
+from utilities.benchmark import OCRThroughputStats
+from utilities.downscale_to_1080p import downscale_to_1080p
 
+# From functions/
+from functions.detection.close_inference import run_close_inference
+from functions.detection.roi_inference import keep_detections_inside_roi, shift_detections_to_full_frame
+from functions.ocr.ocr_worker import OCRWorker
+from functions.spatial.homography import load_close_homography, load_wide_homography, select_close_frame
+from functions.spatial.roi.setup import load_or_select_close_rois, load_or_select_wide_rois
 from functions.system.config import load_config
+from functions.system.controls import KeyboardControlState, handle_keypress, pause
 from functions.tracking.close_association import bbox_top_center_xyxy, match_close_helmets_to_people
 from functions.tracking.cross_camera_transfer import (
     build_close_to_wide_mapping,
     build_helmet_crops_for_wide_ids,
 )
-from functions.detection.roi_inference import keep_detections_inside_roi, shift_detections_to_full_frame
-from functions.detection.close_inference import run_close_inference
-from functions.spatial.rink_projection import project_bboxes_to_rink_canvas
-from functions.visualization.helmet_gui import prompt_race_setup
-from functions.visualization.lap_panel import render_lap_panel
-from functions.ocr.ocr_worker import OCRWorker
-from functions.spatial.homography import select_close_frame, load_close_homography, load_wide_homography
-from functions.system.controls import KeyboardControlState, handle_keypress
-from functions.visualization.lap_panel import LapPanelState, prompt_total_laps, update_lap_panel_state
-from functions.spatial.roi.setup import (
-    load_or_select_close_rois,
-    load_or_select_wide_rois,
-)
 from functions.tracking.tracker import Tracker
+from functions.visualization.helmet_gui import prompt_race_setup
+from functions.visualization.lap_panel import LapPanelState, update_lap_panel_state
 from functions.visualization.rink_view import build_rink_view
 from functions.visualization.visualization import (
     compose_dashboard_canvas,
@@ -36,65 +38,33 @@ from functions.visualization.visualization import (
     draw_bboxes,
     draw_finish_line_overlay,
     draw_match_lines,
-    get_screen_size,
     draw_roi_lines,
+    get_screen_size,
     setup_window,
 )
-from hardware_detector import HardwareDetector
-from pipeline.async_pipeline import AsyncFramePipeline
-from utilities.benchmark import OCRThroughputStats
-from utilities.downscale_to_1080p import downscale_to_1080p
 
+dashboard_window_name = "Race Dashboard"
 # Keep TensorRT TF32 behavior stable between engine build and execution contexts.
 os.environ.setdefault("NVIDIA_TF32_OVERRIDE", "0")
 
-config = {
-    'Model_OV_path': "models/best_openvino_model",
-    'Model_PT_path': "models/1280.pt",
-    'Tensor_engine_path': "models/1280.engine",
-    'USE_FP16': True,
-    'IMGSZ': 1280,
-}
+def main(config):
+    # Frequently used config variables
+    runtime_config = config["Runtime"]
+    inference_config = config["Inference"]
+    rink_config = config["Rink"]
+    conf_threshold = runtime_config["CONF_THRESHOLD"]
+    frame_skip = runtime_config["FRAME_SKIP"]
+    ocr_vote = runtime_config["OCR_VOTE"]
+    close_helmet_person_max_dist = runtime_config["CLOSE_HELMET_PERSON_MAX_DIST"]
+    close_helmet_person_max_below_ratio = runtime_config["CLOSE_HELMET_PERSON_MAX_BELOW_RATIO"]
 
-WIDE_SOURCE = "DJI_20260301122027_0001_D.MP4"
-CLOSE_SOURCE = "Canon_2026-03-01_12-20-29.mp4"
-CONF_THRESHOLD = 0.2
-FRAME_SKIP = 1
-OCR_VOTE = 3          # collect votes for N frames before deciding
-MAX_SYNC_DELTA = 0.05
-CLOSE_HELMET_PERSON_MAX_DIST = 80
-CLOSE_HELMET_PERSON_MAX_BELOW_RATIO = 0.08
-HELMET_CLASS_ID = 0
-PERSON_CLASS_ID = 1
-SYNC_MISS_LOG_INTERVAL = 2.0
+    max_sync_delta = config["FrameSync"]["MAX_SYNC_DELTA"]
+    sync_miss_log_interval = config["FrameSync"]["SYNC_MISS_LOG_INTERVAL"]
 
-HOMOGRAPHY_PATH = os.path.join("data", "homography.json")
-RINK_WIDE_H_PATH = os.path.join("data", "homography_wide.json")
-RINK_CLOSE_H_PATH = os.path.join("data", "homography_close.json")
-FINISH_LINE_PATH = os.path.join("data", "finish_line.json")
-YOLO_ROI_PATH = os.path.join("data", "yolo_roi.json")
-OCR_ROI_PATH = os.path.join("data", "ocr_roi.json")
-CLOSE_YOLO_ROI_PATH = os.path.join("data", "close_yolo_roi.json")
-CLOSE_OCR_ROI_PATH = os.path.join("data", "close_ocr_roi.json")
+    rink_bounds = rink_config["RINK_BOUNDS"]
+    rink_red_lines = rink_config["RINK_RED_LINES"]
+    rink_match_max_dist = rink_config["RINK_MATCH_MAX_DIST"]
 
-# IIHF 60m x 30m rink -> half-extents: x in [-15, 15], y in [-30, 30]
-RINK_BOUNDS = (-15.0, 15.0, -30.0, 30.0)
-RINK_GOAL_LINE_OFFSET = 26.0
-RINK_RED_LINES = (0.0, -RINK_GOAL_LINE_OFFSET, RINK_GOAL_LINE_OFFSET)
-RINK_MATCH_MAX_DIST = 1.5
-dashboard_window_name = "Race Dashboard"
-
-INFERENCE_CONFIG = {
-    'conf': CONF_THRESHOLD,
-    'iou': 0.5,
-    'max_det': 100,
-    'imgsz': 1280,
-    'half': True, # Switch til True hvis du bruker GPU
-    'device': None, # Same here
-    'verbose': False,
-}
-
-def main():
     startup_setup = prompt_race_setup()
     if startup_setup is None:
         print("Startup cancelled before race setup was completed.")
@@ -103,7 +73,7 @@ def main():
     helmet_numbers = startup_setup.helmet_numbers
     total_laps = startup_setup.total_laps
 
-    detector = HardwareDetector(config)
+    detector = HardwareDetector(config["Model"])
     model = detector.initialize_model()
     print(f"Loaded {len(helmet_numbers)} helmet numbers from startup GUI.")
 
@@ -115,7 +85,7 @@ def main():
     lap_panel_width, lap_panel_height = window_layout["lap_panel_size"]
 
     # Open video
-    preview_cap = cv2.VideoCapture(WIDE_SOURCE)
+    preview_cap = cv2.VideoCapture(config["Path"]["WIDE_SOURCE"])
     fps = preview_cap.get(cv2.CAP_PROP_FPS)
     wide_ret, preview_frame = preview_cap.read()
     preview_cap.release()
@@ -124,7 +94,7 @@ def main():
     if not wide_ret:
         raise RuntimeError("Could not read initial frame for ROI.")
 
-    close_preview_cap = cv2.VideoCapture(CLOSE_SOURCE)
+    close_preview_cap = cv2.VideoCapture(config["Path"]["CLOSE_SOURCE"])
     close_ret, close_preview_frame = close_preview_cap.read()
     close_preview_cap.release()
 
@@ -137,9 +107,9 @@ def main():
     # One for running the helmet number (OCR)
     yolo_roi, ocr_roi, finish_line = load_or_select_wide_rois(
         preview_frame=preview_frame,
-        yolo_roi_path=YOLO_ROI_PATH,
-        ocr_roi_path=OCR_ROI_PATH,
-        finish_line_path=FINISH_LINE_PATH,
+        yolo_roi_path=config["Path"]["YOLO_ROI_PATH"],
+        ocr_roi_path=config["Path"]["OCR_ROI_PATH"],
+        finish_line_path=config["Path"]["FINISH_LINE_PATH"],
     )
 
     # Create the dashboard window based on the user's screen size.
@@ -149,14 +119,14 @@ def main():
     # Else it prompts the user to draw ROIs for the missing ROIs.
     close_yolo_roi, close_ocr_roi = load_or_select_close_rois(
         close_preview_frame=close_preview_frame,
-        close_yolo_roi_path=CLOSE_YOLO_ROI_PATH,
-        close_ocr_roi_path=CLOSE_OCR_ROI_PATH,
+        close_yolo_roi_path=config["Path"]["CLOSE_YOLO_ROI_PATH"],
+        close_ocr_roi_path=config["Path"]["CLOSE_OCR_ROI_PATH"],
     )
 
     # Create the Tracker
     tracker = Tracker(
-        OCR_VOTE,
-        CONF_THRESHOLD,
+        ocr_vote,
+        conf_threshold,
         ocr_roi,
         frame_rate=fps,
         finish_line=finish_line,
@@ -167,15 +137,15 @@ def main():
 
     # WIDE Source
     pipeline = AsyncFramePipeline(
-        source=WIDE_SOURCE,
-        frame_skip=FRAME_SKIP,
+        source=config["Path"]["WIDE_SOURCE"],
+        frame_skip=frame_skip,
         queue_size=3,
         inference_roi=yolo_roi,
     )
     # CLOSE Source
     pipeline_close = AsyncFramePipeline(
-        source=CLOSE_SOURCE,
-        frame_skip=FRAME_SKIP,
+        source=config["Path"]["CLOSE_SOURCE"],
+        frame_skip=frame_skip,
         queue_size=3,
         inference_roi=close_yolo_roi,
     )
@@ -197,8 +167,8 @@ def main():
     # Loading rink homography for both wide and close feed.
     # These are the homography that contain the numbers that allow
     # the program to project points the different cameras into the virtual rink space.
-    wide_rink_h = load_wide_homography(RINK_WIDE_H_PATH)
-    close_rink_h = load_close_homography(RINK_CLOSE_H_PATH)
+    wide_rink_h = load_wide_homography(config["Path"]["RINK_WIDE_H_PATH"])
+    close_rink_h = load_close_homography(config["Path"]["RINK_CLOSE_H_PATH"])
 
     # Section for initializing benchmark classes here:
     ocr_bench = OCRThroughputStats(log_every_sec=2.0)
@@ -231,21 +201,10 @@ def main():
         while True:
             # Pause logic (With Space Bar)
             if keyboard_state.paused and last_dashboard_frame is not None:
-                paused_frame = last_dashboard_frame.copy()
-                cv2.putText(
-                    paused_frame,
-                    "PAUSED (Space to resume)",
-                    (10, 70),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.8,
-                    (0, 255, 255),
-                    2,
-                )
-                cv2.imshow(dashboard_window_name, paused_frame)
-                key = cv2.waitKey(30) & 0xFF
-                if key == 27:
+                pause_result = pause(last_dashboard_frame, dashboard_window_name)
+                if pause_result.should_quit:
                     break
-                if key == ord(" "):
+                if pause_result.should_resume:
                     keyboard_state.paused = False
                 continue
 
@@ -273,14 +232,14 @@ def main():
             # Maybe we only need detection for class 1 (people) here???
             result = model(
                 inference_frame,
-                conf=INFERENCE_CONFIG['conf'],
-                iou=INFERENCE_CONFIG['iou'],
-                max_det=INFERENCE_CONFIG['max_det'],
-                imgsz=INFERENCE_CONFIG['imgsz'],
-                half=INFERENCE_CONFIG['half'],
-                device=INFERENCE_CONFIG['device'],
-                verbose=INFERENCE_CONFIG['verbose'],
-                classes=[PERSON_CLASS_ID]
+                conf=inference_config['conf'],
+                iou=inference_config['iou'],
+                max_det=inference_config['max_det'],
+                imgsz=inference_config['imgsz'],
+                half=inference_config['half'],
+                device=inference_config['device'],
+                verbose=inference_config['verbose'],
+                classes=[config["ModelClass"]["PERSON_CLASS_ID"]]
             )[0]
 
             detections = sv.Detections.from_ultralytics(result)
@@ -296,7 +255,7 @@ def main():
             close_frame = None
             synced_close_item = None
             if close_rink_h is not None:
-                synced_close_item = select_close_frame(close_buffer, item.ts, MAX_SYNC_DELTA)
+                synced_close_item = select_close_frame(close_buffer, item.ts, max_sync_delta)
                 if synced_close_item is not None:
                     close_frame = synced_close_item.frame
 
@@ -314,9 +273,9 @@ def main():
                         if len(helmet_in_roi) > 0:
                             close_sync_misses += 1
                             now = time.perf_counter()
-                            if now - last_close_sync_log >= SYNC_MISS_LOG_INTERVAL:
+                            if now - last_close_sync_log >= sync_miss_log_interval:
                                 print(
-                                    f"Skipping multi-cam OCR: no close frame within {MAX_SYNC_DELTA:.3f}s "
+                                    f"Skipping multi-cam OCR: no close frame within {max_sync_delta:.3f}s "
                                     f"(misses={close_sync_misses})"
                                 )
                                 last_close_sync_log = now
@@ -326,9 +285,9 @@ def main():
                     close_out = run_close_inference(
                         model=model,
                         frame_item=synced_close_item,
-                        inference_config=INFERENCE_CONFIG,
-                        helmet_class_id=HELMET_CLASS_ID,
-                        person_class_id=PERSON_CLASS_ID,
+                        inference_config=inference_config,
+                        helmet_class_id=config["ModelClass"]["HELMET_CLASS_ID"],
+                        person_class_id=config["ModelClass"]["PERSON_CLASS_ID"],
                         yolo_roi=close_yolo_roi,
                         ocr_roi=close_ocr_roi,
                     )
@@ -348,8 +307,8 @@ def main():
                     helmet_person_matches = match_close_helmets_to_people(
                         close_helmets,
                         close_people,
-                        max_dist=CLOSE_HELMET_PERSON_MAX_DIST,
-                        max_person_top_below_ratio=CLOSE_HELMET_PERSON_MAX_BELOW_RATIO,
+                        max_dist=close_helmet_person_max_dist,
+                        max_person_top_below_ratio=close_helmet_person_max_below_ratio,
                     )
 
                     # Draws the line between top center of the matching helmet and person bboxes.
@@ -371,7 +330,7 @@ def main():
                         wide_rink_h,
                         close_rink_h,
                         img_shape=frame.shape,
-                        max_dist=RINK_MATCH_MAX_DIST,
+                        max_dist=rink_match_max_dist,
                     )
                     # Then we extract only the helmets that has been connected to people tracks across screens
                     helmet_crops = build_helmet_crops_for_wide_ids(
@@ -402,15 +361,15 @@ def main():
                     close_people=close_people,
                     wide_rink_h=wide_rink_h,
                     close_rink_h=close_rink_h,
-                    bounds=RINK_BOUNDS,
+                    bounds=rink_bounds,
                     canvas_size=rink_canvas_size,
                     img_shape=frame.shape,
-                    max_dist=RINK_MATCH_MAX_DIST,
+                    max_dist=rink_match_max_dist,
                     horizontal=True,
                     draw_center_line=False,
                     draw_center_circle=True,
                     center_circle_radius=4.5,
-                    red_lines=RINK_RED_LINES,
+                    red_lines=rink_red_lines,
                 )
 
             # Draws the wide camera ROIs onto the annotated frame.
@@ -497,11 +456,11 @@ def main():
                 pipeline_close=pipeline_close,
                 frame=frame,
                 close_preview_frame=close_preview_frame,
-                yolo_roi_path=YOLO_ROI_PATH,
-                ocr_roi_path=OCR_ROI_PATH,
-                close_yolo_roi_path=CLOSE_YOLO_ROI_PATH,
-                close_ocr_roi_path=CLOSE_OCR_ROI_PATH,
-                finish_line_path=FINISH_LINE_PATH,
+                yolo_roi_path=config["Path"]["YOLO_ROI_PATH"],
+                ocr_roi_path=config["Path"]["OCR_ROI_PATH"],
+                close_yolo_roi_path=config["Path"]["CLOSE_YOLO_ROI_PATH"],
+                close_ocr_roi_path=config["Path"]["CLOSE_OCR_ROI_PATH"],
+                finish_line_path=config["Path"]["FINISH_LINE_PATH"],
             )
 
             # Give new state to the keyboard_state controller.
@@ -524,4 +483,5 @@ def main():
 # Main guard needed for multiprocessing
 if __name__ == '__main__':
     freeze_support()
-    main()
+    config = load_config("data/config.ini")
+    main(config)
