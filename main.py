@@ -4,13 +4,11 @@ import cv2
 import os
 import time
 
-import numpy as np
 import supervision as sv
 
 from collections import deque
 
-from sympy.physics.units.definitions.unit_definitions import franklin
-
+from functions.system.config import load_config
 from functions.tracking.close_association import bbox_top_center_xyxy, match_close_helmets_to_people
 from functions.tracking.cross_camera_transfer import (
     build_close_to_wide_mapping,
@@ -147,7 +145,7 @@ def main():
     # Create the dashboard window based on the user's screen size.
     setup_window(window_layout, window_name=dashboard_window_name)
 
-    # Loads the saved close ROIs if it find any from CLOSE_YOLO_ROI_PATH and CLOSE_OCR_ROI_PATH
+    # Loads the saved close ROIs if it finds any from CLOSE_YOLO_ROI_PATH and CLOSE_OCR_ROI_PATH
     # Else it prompts the user to draw ROIs for the missing ROIs.
     close_yolo_roi, close_ocr_roi = load_or_select_close_rois(
         close_preview_frame=close_preview_frame,

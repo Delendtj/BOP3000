@@ -11,3 +11,4 @@ __pycache__/
 *.pyc
 *.pyo
 output/*
+data/config.ini
