@@ -179,6 +179,34 @@ def compose_display_canvas(wide_frame, close_frame, panel_size, wide_subtitle=No
     return np.hstack([wide_panel, close_panel])
 
 
+def _place_panel(canvas, panel, x, y):
+    if panel is None:
+        return
+    panel_h, panel_w = panel.shape[:2]
+    canvas[y:y + panel_h, x:x + panel_w] = panel
+
+
+def compose_dashboard_canvas(lap_panel, display_frame, rink_canvas, window_layout):
+    dashboard_width, dashboard_height = window_layout["dashboard_size"]
+    dashboard = np.full((dashboard_height, dashboard_width, 3), 18, dtype=np.uint8)
+
+    padding = window_layout["padding"]
+    section_gap = window_layout["section_gap"]
+    vertical_gap = window_layout["vertical_gap"]
+    lap_width, _ = window_layout["lap_panel_size"]
+    right_x = padding + lap_width + section_gap
+
+    if lap_panel is not None:
+        _place_panel(dashboard, lap_panel, padding, padding)
+    if display_frame is not None:
+        _place_panel(dashboard, display_frame, right_x, padding)
+    if rink_canvas is not None:
+        rink_y = padding + window_layout["display_panel_size"][1] + vertical_gap
+        _place_panel(dashboard, rink_canvas, right_x, rink_y)
+
+    return dashboard
+
+
 def get_screen_size():
     root = tk.Tk()
     root.withdraw()
@@ -202,34 +230,31 @@ def compute_window_layout(screen_width, screen_height):
     padding = max(12, int(min(screen_width, screen_height) * 0.01))
     lap_width = _clamp(screen_width * 0.17, 280, 420)
     right_width = max(720, screen_width - lap_width - (padding * 3))
-    window_gap = padding + 48
-    available_right_height = max(620, screen_height - (padding * 2) - window_gap)
+    section_gap = padding + 24
+    vertical_gap = 0
+    available_right_height = max(620, screen_height - (padding * 2) - vertical_gap)
     top_height = _clamp(available_right_height * 0.52, 320, available_right_height - 240)
     bottom_height = max(220, available_right_height - top_height)
+    lap_height = screen_height - (padding * 2)
+    dashboard_width = lap_width + right_width + (padding * 2) + section_gap
+    dashboard_height = max(
+        lap_height + (padding * 2),
+        top_height + bottom_height + (padding * 2) + vertical_gap,
+    )
 
     return {
+        "padding": padding,
+        "section_gap": section_gap,
+        "vertical_gap": vertical_gap,
         "display_panel_size": (max(320, right_width // 2), top_height),
         "rink_canvas_size": (right_width, bottom_height),
-        "lap_panel_size": (lap_width, screen_height - (padding * 2)),
-        "multi_cam_pos": (lap_width + (padding * 2), padding),
-        "lap_pos": (padding, padding),
-        "rink_pos": (lap_width + (padding * 2), padding + top_height + window_gap),
+        "lap_panel_size": (lap_width, lap_height),
+        "dashboard_size": (dashboard_width, dashboard_height),
+        "dashboard_pos": (padding, padding),
     }
 
 
-def setup_windows(window_layout, *, multi_cam_name, lap_name, rink_name):
-    display_panel_size = window_layout["display_panel_size"]
-    rink_canvas_size = window_layout["rink_canvas_size"]
-    lap_panel_width, lap_panel_height = window_layout["lap_panel_size"]
-
-    cv2.namedWindow(multi_cam_name, cv2.WINDOW_NORMAL)
-    cv2.resizeWindow(multi_cam_name, display_panel_size[0] * 2, display_panel_size[1])
-    cv2.moveWindow(multi_cam_name, *window_layout["multi_cam_pos"])
-
-    cv2.namedWindow(lap_name, cv2.WINDOW_NORMAL)
-    cv2.resizeWindow(lap_name, lap_panel_width, lap_panel_height)
-    cv2.moveWindow(lap_name, *window_layout["lap_pos"])
-
-    cv2.namedWindow(rink_name, cv2.WINDOW_NORMAL)
-    cv2.resizeWindow(rink_name, *rink_canvas_size)
-    cv2.moveWindow(rink_name, *window_layout["rink_pos"])
+def setup_window(window_layout, *, window_name):
+    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+    cv2.resizeWindow(window_name, *window_layout["dashboard_size"])
+    cv2.moveWindow(window_name, *window_layout["dashboard_pos"])

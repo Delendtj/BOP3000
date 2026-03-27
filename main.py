@@ -18,6 +18,9 @@ from functions.tracking.cross_camera_transfer import (
 )
 from functions.detection.roi_inference import keep_detections_inside_roi, shift_detections_to_full_frame
 from functions.detection.close_inference import run_close_inference
+from functions.spatial.rink_projection import project_bboxes_to_rink_canvas
+from functions.visualization.helmet_gui import prompt_race_setup
+from functions.visualization.lap_panel import render_lap_panel
 from functions.ocr.ocr_worker import OCRWorker
 from functions.spatial.homography import select_close_frame, load_close_homography, load_wide_homography
 from functions.system.controls import KeyboardControlState, handle_keypress
@@ -29,6 +32,7 @@ from functions.spatial.roi.setup import (
 from functions.tracking.tracker import Tracker
 from functions.visualization.rink_view import build_rink_view
 from functions.visualization.visualization import (
+    compose_dashboard_canvas,
     compose_display_canvas,
     compute_window_layout,
     draw_bboxes,
@@ -36,7 +40,7 @@ from functions.visualization.visualization import (
     draw_match_lines,
     get_screen_size,
     draw_roi_lines,
-    setup_windows,
+    setup_window,
 )
 from hardware_detector import HardwareDetector
 from pipeline.async_pipeline import AsyncFramePipeline
@@ -54,8 +58,8 @@ config = {
     'IMGSZ': 1280,
 }
 
-WIDE_SOURCE = "../videos/wide_cam.mp4"
-CLOSE_SOURCE = "../videos/close_cam.mp4"
+WIDE_SOURCE = "DJI_20260301122027_0001_D.MP4"
+CLOSE_SOURCE = "Canon_2026-03-01_12-20-29.mp4"
 CONF_THRESHOLD = 0.2
 FRAME_SKIP = 1
 OCR_VOTE = 3          # collect votes for N frames before deciding
@@ -80,9 +84,7 @@ RINK_BOUNDS = (-15.0, 15.0, -30.0, 30.0)
 RINK_GOAL_LINE_OFFSET = 26.0
 RINK_RED_LINES = (0.0, -RINK_GOAL_LINE_OFFSET, RINK_GOAL_LINE_OFFSET)
 RINK_MATCH_MAX_DIST = 1.5
-multi_cam_window_name = "Multi-cam view"
-rink_window_name = "Rink view"
-lap_window_name = "Lap Count"
+dashboard_window_name = "Race Dashboard"
 
 INFERENCE_CONFIG = {
     'conf': CONF_THRESHOLD,
@@ -95,11 +97,17 @@ INFERENCE_CONFIG = {
 }
 
 def main():
+    startup_setup = prompt_race_setup()
+    if startup_setup is None:
+        print("Startup cancelled before race setup was completed.")
+        return
+
+    helmet_numbers = startup_setup.helmet_numbers
+    total_laps = startup_setup.total_laps
+
     detector = HardwareDetector(config)
     model = detector.initialize_model()
-
-    # Show prompt for user input (laps)
-    total_laps = prompt_total_laps()
+    print(f"Loaded {len(helmet_numbers)} helmet numbers from startup GUI.")
 
     # Gather all screen specifications needed for layout
     screen_width, screen_height = get_screen_size()
@@ -136,14 +144,8 @@ def main():
         finish_line_path=FINISH_LINE_PATH,
     )
 
-    # Create the windows and their layout.
-    # They are based on the users screen size.
-    setup_windows(
-        window_layout,
-        multi_cam_name=multi_cam_window_name,
-        lap_name=lap_window_name,
-        rink_name=rink_window_name,
-    )
+    # Create the dashboard window based on the user's screen size.
+    setup_window(window_layout, window_name=dashboard_window_name)
 
     # Loads the saved close ROIs if it find any from CLOSE_YOLO_ROI_PATH and CLOSE_OCR_ROI_PATH
     # Else it prompts the user to draw ROIs for the missing ROIs.
@@ -218,7 +220,7 @@ def main():
     fps_ema = 0.0           # Exponential moving average (used for seeing a more stable FPS on display)
     frame_count = 0         # Current frame count (mostly for debug and logging)
 
-    last_display_frame = None
+    last_dashboard_frame = None
     close_sync_misses = 0
     last_close_sync_log = 0.0
 
@@ -230,8 +232,8 @@ def main():
     try:
         while True:
             # Pause logic (With Space Bar)
-            if keyboard_state.paused and last_display_frame is not None:
-                paused_frame = last_display_frame.copy()
+            if keyboard_state.paused and last_dashboard_frame is not None:
+                paused_frame = last_dashboard_frame.copy()
                 cv2.putText(
                     paused_frame,
                     "PAUSED (Space to resume)",
@@ -241,9 +243,7 @@ def main():
                     (0, 255, 255),
                     2,
                 )
-                cv2.imshow(multi_cam_window_name, paused_frame)
-                if lap_panel_state.panel is not None:
-                    cv2.imshow(lap_window_name, lap_panel_state.panel)
+                cv2.imshow(dashboard_window_name, paused_frame)
                 key = cv2.waitKey(30) & 0xFF
                 if key == 27:
                     break
@@ -395,6 +395,7 @@ def main():
             # Annotate frames
             annotated_frame = tracker.annotate(frame)
 
+            rink_canvas = None
             # Creates the Rink-Space window
             # This is used as a canvas for points representing people tracks on both cams
             if wide_rink_h is not None or close_rink_h is not None:
@@ -413,8 +414,6 @@ def main():
                     center_circle_radius=4.5,
                     red_lines=RINK_RED_LINES,
                 )
-
-                cv2.imshow(rink_window_name, rink_canvas)
 
             # Draws the wide camera ROIs onto the annotated frame.
             draw_roi_lines(annotated_frame, yolo_roi, ocr_roi)
@@ -458,10 +457,6 @@ def main():
                 width=lap_panel_width,
             )
 
-            # Rerender lap_panel
-            if lap_panel_state.panel is not None:
-                cv2.imshow(lap_window_name, lap_panel_state.panel)
-
             # Fallback for when we don't have a synced close frame.
             if close_vis is None and latest_close_frame is not None:
                 close_vis = latest_close_frame.copy()
@@ -483,8 +478,14 @@ def main():
                 wide_subtitle=fps_text,
                 close_subtitle=close_subtitle,
             )
-            last_display_frame = display_frame
-            cv2.imshow(multi_cam_window_name, display_frame)
+            dashboard_frame = compose_dashboard_canvas(
+                lap_panel_state.panel,
+                display_frame,
+                rink_canvas,
+                window_layout,
+            )
+            last_dashboard_frame = dashboard_frame
+            cv2.imshow(dashboard_window_name, dashboard_frame)
 
             # Get the current keypress
             key = cv2.waitKey(1) & 0xFF

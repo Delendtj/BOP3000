@@ -73,7 +73,7 @@ def _build_engine_from_onnx(
         f.write(bytes(serialized_engine))
 
 
-def _export_onnx_from_pt(pt_path, onnx_path, imgsz=640, use_fp16=True):
+def _export_onnx_from_pt(pt_path, onnx_path, imgsz=1280, use_fp16=True):
     if not os.path.exists(pt_path):
         raise FileNotFoundError(f"PyTorch model not found for ONNX export: {pt_path}")
 

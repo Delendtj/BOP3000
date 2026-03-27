@@ -3,7 +3,6 @@ from tkinter import simpledialog
 
 import cv2
 import numpy as np
-import tkinter as tk
 
 
 @dataclass
