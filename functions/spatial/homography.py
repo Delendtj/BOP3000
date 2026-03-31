@@ -106,10 +106,10 @@ def map_close_point_to_wide_distorted(
 
 def select_close_frame(buffer, target_ts: float, max_delta: float) -> Any | None:
     best_item = None
-    best_dt = float("inf")
+    best_dt = float("inf")  # Positive infinity.
     for ts, item in buffer:
         dt = abs(ts - target_ts)
-        if dt < best_dt:
+        if dt < best_dt:    # Guarantee true on first iteration
             best_dt = dt
             best_item = item
     if best_item is None or best_dt > max_delta:
