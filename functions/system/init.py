@@ -112,6 +112,7 @@ def initialize(config, *, dashboard_window_name: str) -> AppContext | None:
         frame_rate=fps,
         finish_line=finish_line,
         total_laps=total_laps,
+        accepted_numbers=helmet_numbers # The helmet numbers from the imported CSV
     )
 
     pipeline = AsyncFramePipeline(

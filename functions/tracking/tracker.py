@@ -58,6 +58,11 @@ class Tracker:
             minimum_iou_threshold=0.15,
             minimum_consecutive_frames=2,
         )
+        ###########################
+        # [SUBJECT TOP BE REMOVED]#
+        ###########################
+        # I don't think we need trackers on helmets anymore?
+        # Because we use numbers on the helmets as ids, and there is no benefit for tracks across frames.
         self.tracker_helmet = ByteTrackTracker(
             lost_track_buffer=90,
             frame_rate=self.frame_rate,
@@ -295,7 +300,7 @@ class Tracker:
         keep = np.isin(self.helmet_tracks.tracker_id, confirmed_ids, invert=True)
         return self.helmet_tracks[keep]
 
-    def check_for_ocr(self, helmets):
+    def assign_helmet_numbers_to_people(self, helmets):
         non_confirmed_helmets = self.helmet_tracks[
             np.isin(self.helmet_tracks.tracker_id, list(self.helmet_numbers_final.keys()), invert=True)
         ]
@@ -330,8 +335,11 @@ class Tracker:
                 continue
 
             state["runs"] += 1
+            # Check if the number is part of the accepted helmet numbers
+            # (from CSV file)
+            number = self._match_partial(number)
 
-            if number != "":
+            if number != "" and number is not None:
                 state["votes"].append(number)
 
             print("tid:", tid, "votes:", state["votes"])
@@ -369,10 +377,13 @@ class Tracker:
 
         return annotated
 
-    def match_partial(self, partial):
+    def _match_partial(self, partial):
         # Needs to be longer than 2
         if len(partial) < 2:
             return None
+        if self.accepted_numbers is None:
+            return partial
+
         # Loops over accepted numbers and keep those where partial is a substring of n.
         candidates = [n for n in self.accepted_numbers if partial in n]
         # If the candidate is only one then we return it. Else it's too ambiguous.

@@ -223,7 +223,7 @@ def main(config):
 
             # Evaluate if the detection is good enough to be set for tracks
             helmets_res = context.ocr_worker.drain_results()
-            context.tracker.check_for_ocr(helmets_res) # Includes all voting logic.
+            context.tracker.assign_helmet_numbers_to_people(helmets_res) # Includes all voting logic.
 
             # Annotate frames
             annotated_frame = context.tracker.annotate(frame)

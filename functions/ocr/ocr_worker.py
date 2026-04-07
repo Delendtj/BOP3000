@@ -61,7 +61,7 @@ def _ocr_process_main(
     from functions.ocr.register_helmet import register_helmet
 
     # We already make a shared memory in start()
-    # We then connect to that same memory space by having create=False and correct name=
+    # We then connect to that same memory space by having create=False and correct name=shm_name input param
     # This is not a new memory space just new object referring to same place of memory.
     ring = SharedMemoryRing(
         name=shm_name,
@@ -156,7 +156,7 @@ class OCRWorker:
     The worker contains logic for queue handling and writing/reading from shared memory ring.
     The queue handles metadata for the images
     While the shared memory ring contains the actual image
-    So the queue just contaisn the information it needs to find the image from the memory ring.
+    So the queue just contains the information it needs to find the image from the memory ring.
     """
 
     def __init__(
