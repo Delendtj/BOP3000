@@ -138,8 +138,9 @@ def main(config):
 
             close_people = None
             helmet_crops = []
+            print("ocr_roi is not None: ", context.ocr_roi is not None)
             if context.ocr_roi is not None:
-                helmet_tracks = context.tracker.get_non_confirmed_helmet_tracks()
+                helmet_tracks = context.tracker.get_non_confirmed_people_tracks()
                 helmet_in_roi = keep_detections_inside_roi(helmet_tracks, context.ocr_roi)
 
                 # When the close_buffer doesn't have any valid items
@@ -171,6 +172,13 @@ def main(config):
                     close_helmets = close_out.helmets
                     close_people = close_out.people
 
+                    print(
+                        "[ocr-debug] close_inference: helmets=",
+                        len(close_helmets) if close_helmets is not None else 0,
+                        "people=",
+                        len(close_people) if close_people is not None else 0,
+                    )
+
                     close_vis = close_frame.copy()
 
                     # Draw boxes on each
@@ -185,6 +193,11 @@ def main(config):
                         close_people,
                         max_dist=close_helmet_person_max_dist,
                         max_person_top_below_ratio=close_helmet_person_max_below_ratio,
+                    )
+
+                    print(
+                        "[ocr-debug] helmet_person_matches=",
+                        len(helmet_person_matches) if helmet_person_matches is not None else 0,
                     )
 
                     # Draws the line between top center of the matching helmet and person bboxes.
@@ -208,12 +221,22 @@ def main(config):
                         img_shape=frame.shape,
                         max_dist=rink_match_max_dist,
                     )
+
+                    print(
+                        "[ocr-debug] close_to_wide_tid=",
+                        len(close_to_wide_tid) if close_to_wide_tid is not None else 0,
+                    )
                     # Then we extract only the helmets that has been connected to people tracks across screens
                     helmet_crops = build_helmet_crops_for_wide_ids(
                         close_helmets,
                         close_frame,
                         helmet_person_matches,
                         close_to_wide_tid,
+                    )
+
+                    print(
+                        "[ocr-debug] helmet_crops=",
+                        len(helmet_crops) if helmet_crops is not None else 0,
                     )
 
                 # Give associated helmet crops to the ocr_worker
