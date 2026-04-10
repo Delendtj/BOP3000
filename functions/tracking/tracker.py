@@ -75,11 +75,10 @@ class Tracker:
         self.label_annotator = sv.LabelAnnotator()
 
         self.people_tracks = sv.Detections.empty()
-        self.helmet_tracks = sv.Detections.empty()
 
         self.processed_tracker_ids = set()
         self.ocr_runs = defaultdict(lambda: {"runs": 0, "cooldown": 0, "votes": []})
-        self.helmet_numbers_final = {}
+        self.people_hnum_final = {}
 
         self.person_class_id = 1
         self.helmet_class_id = 0
@@ -130,22 +129,21 @@ class Tracker:
     def track_detection(self, detections: sv.Detections):
         self.person_frame_index += 1
         people_detections = detections[detections.class_id == self.person_class_id]
-        helmet_detections = detections[detections.class_id == self.helmet_class_id]
 
         people_for_tracker = people_detections[people_detections.confidence > self.conf_threshold]
-        helmets_for_tracker = helmet_detections[helmet_detections.confidence > self.conf_threshold]
 
         raw_people_tracks = self.tracker_people.update(people_for_tracker)
         self.people_tracks = self._apply_person_reuse(raw_people_tracks)
-        self.helmet_tracks = self.tracker_helmet.update(helmets_for_tracker)
 
-        # Fill data attribute with a "helmet_number" dict key to store helmet numbers
-        if "helmet_number" not in self.helmet_tracks.data:
-            self.helmet_tracks.data["helmet_number"] = np.full(len(self.helmet_tracks), -1, dtype=object)
+        # Fill data attribute into the people_tracks.data (Detections obj)
+        # with a "helmet_number" dict key to store helmet numbers
+        if "helmet_number" not in self.people_tracks.data:
+            self.people_tracks.data["helmet_number"] = np.full(len(self.people_tracks), -1, dtype=object)
 
         # Actually add them into the tracks
-        self.helmet_tracks.data["helmet_number"] = np.array(
-            [self.helmet_numbers_final.get(tid, -1) for tid in self.helmet_tracks.tracker_id],
+        # Init as -1
+        self.people_tracks.data["helmet_number"] = np.array(
+            [self.people_hnum_final.get(tid, -1) for tid in self.people_tracks.tracker_id],
             dtype=object,
         )
 
@@ -281,6 +279,7 @@ class Tracker:
         existing.last_seen_frame = self.person_frame_index
         existing.active = True
 
+    # Im not sure what this even does...
     def _prune_stale_person_memories(self):
         for canonical_id, memory in list(self.canonical_person_memories.items()):
             if memory.active:
@@ -291,28 +290,41 @@ class Tracker:
     def update_lap_counts(self):
         self.lap_counter.update(self.people_tracks)
 
-    def get_non_confirmed_helmet_tracks(self):
-        confirmed_ids = np.array(list(self.helmet_numbers_final.keys()), dtype=int)
+    def get_non_confirmed_people_tracks(self) -> sv.Detections:
+        """
+        Returns part of self.people_tracks that is non confirmed.
+        """
+        # Filter to get only confirmed IDs
+        confirmed_ids = np.array(list(self.people_hnum_final.keys()), dtype=int)
 
         if confirmed_ids.size == 0:
-            return self.helmet_tracks
+            return self.people_tracks
 
-        keep = np.isin(self.helmet_tracks.tracker_id, confirmed_ids, invert=True)
-        return self.helmet_tracks[keep]
+        # Mask of nonconfirmed
+        keep = np.isin(self.people_tracks.tracker_id, confirmed_ids, invert=True)
+        return self.people_tracks[keep]
 
     def assign_helmet_numbers_to_people(self, helmets):
-        non_confirmed_helmets = self.helmet_tracks[
-            np.isin(self.helmet_tracks.tracker_id, list(self.helmet_numbers_final.keys()), invert=True)
-        ]
+        """
+        Assign helmet numbers to people_tracks.data["helmet_number"]
+        This is based on:
+            - There is enough votes in self.ocr_runs[tid]["votes"]
+            - The most common number from the given list of voted numbers.
+            - That the number is one inside self.accepted_numbers (CSV), this happens through _match_partial()
+        """
+        non_confirmed_people = self.get_non_confirmed_people_tracks()
 
-        if helmets is None or self.roi is None or len(non_confirmed_helmets) == 0:
+        if (helmets is None
+                or len(helmets) == 0
+                or self.roi is None
+                or len(non_confirmed_people) == 0):
             return
 
-        if len(helmets) == 0:
-            return
+        # Get a list of nonconfirmed TIDs
+        # It's called allowed_ids since these are the IDs we allow to be checked.
+        allowed_ids = set(non_confirmed_people.tracker_id.tolist())
 
-        allowed_ids = set(non_confirmed_helmets.tracker_id.tolist())
-
+        # Loop through each crop and assign them into people_tracks.data["helmet_numbers"]
         for h in helmets:
             tid = h["track_id"]
             number = h["helmet_number"]
@@ -327,8 +339,10 @@ class Tracker:
 
             state = self.ocr_runs[tid]
 
+            # Increments the cooldown if its active, and resets if it ran certain amount of times.
             if state["runs"] >= self.runs_before_retry:
                 state["cooldown"] += 1
+                # Reset if cooldown reached
                 if state["cooldown"] >= self.runs_cooldown:
                     state["runs"] = 0
                     state["cooldown"] = 0
@@ -339,33 +353,34 @@ class Tracker:
             # (from CSV file)
             number = self._match_partial(number)
 
-            if number != "" and number is not None:
-                state["votes"].append(number)
+            if number == "" and number is None:
+                print("Number didn't natch accepted numbers...")
+                pass
+
+            state["votes"].append(number)
 
             print("tid:", tid, "votes:", state["votes"])
             # Given enough votes and tid not being a confirmed helmet
-            if len(state["votes"]) >= self.ocr_votes_count and tid not in self.helmet_numbers_final:
-
-                #uniksjekk
+            if len(state["votes"]) >= self.ocr_votes_count and tid not in self.people_hnum_final:
+                # Get the number that is most common based on N votes.
                 final_number = Counter(state["votes"]).most_common(1)[0][0]
-                if final_number in self.helmet_numbers_final.values():
-                    print(f"Tracker {tid}: #{final_number} allerede i bruk — avvist, prøver igjen.")
-                    state["votes"].clear()
-                    state["runs"] = 0
-                    continue
-                self.helmet_numbers_final[tid] = final_number
+
+                mask = self.people_tracks.tracker_id == tid
+                idxs = np.where(mask)[0] # Is this really necessary since we already have tid?
+                if len(idxs) > 0:
+                    # Assigns the final number for given people track, making it now confirmed.
+                    # Saved in people_tracks.data["helmet_number"]
+                    self.people_tracks.data["helmet_number"][idxs[0]] = final_number
+
+
+                # Assigns the final number into easily accessible list of accepted numbers.
+                self.people_hnum_final[tid] = final_number
                 print(f"Tracker {tid} final helmet number: {final_number}")
 
-                mask = self.helmet_tracks.tracker_id == tid
-                idxs = np.where(mask)[0]
-                if len(idxs) > 0:
-                    self.helmet_tracks.data["helmet_number"][idxs[0]] = final_number
-
-                self.processed_tracker_ids.add(tid)
 
     def annotate(self, frame):
         annotated = self.box_annotator.annotate(frame, self.people_tracks)
-        annotated = self.box_annotator.annotate(annotated, self.helmet_tracks)
+        # annotated = self.box_annotator.annotate(annotated, self.helmet_tracks)
 
         if len(self.people_tracks) > 0:
             labels = []
@@ -376,11 +391,13 @@ class Tracker:
                     labels.append(f"ID {tid}")
             annotated = self.label_annotator.annotate(annotated, self.people_tracks, labels=labels)
 
-        if len(self.helmet_tracks) > 0:
-            labels = []
-            for i, tid in enumerate(self.helmet_tracks.tracker_id):
-                labels.append(f"ID {tid}, Number: {self.helmet_tracks.data['helmet_number'][i]}")
-            annotated = self.label_annotator.annotate(annotated, self.helmet_tracks, labels=labels)
+        # Old code for annotating helmets.
+        # I leave it here in case we need to do this again.
+        # if len(self.helmet_tracks) > 0:
+        #     labels = []
+        #     for i, tid in enumerate(self.helmet_tracks.tracker_id):
+        #         labels.append(f"ID {tid}, Number: {self.helmet_tracks.data['helmet_number'][i]}")
+        #     annotated = self.label_annotator.annotate(annotated, self.helmet_tracks, labels=labels)
 
         return annotated
 
