@@ -353,8 +353,8 @@ class Tracker:
             # (from CSV file)
             number = self._match_partial(number)
 
-            if number == "" and number is None:
-                print("Number didn't natch accepted numbers...")
+            if number == "" or number is None:
+                print("Number didn't match accepted numbers...")
                 pass
 
             state["votes"].append(number)
