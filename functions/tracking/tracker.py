@@ -365,6 +365,13 @@ class Tracker:
                 # Get the number that is most common based on N votes.
                 final_number = Counter(state["votes"]).most_common(1)[0][0]
 
+                #UNIKSJEKK
+                if final_number in self.people_hnum_final.values():
+                    print(f"Tracker {tid}: #{final_number} allerede i bruk — avvist, prøver igjen.")
+                    state["votes"].clear()
+                    state["runs"] = 0
+                    continue
+
                 mask = self.people_tracks.tracker_id == tid
                 idxs = np.where(mask)[0] # Is this really necessary since we already have tid?
                 if len(idxs) > 0:
