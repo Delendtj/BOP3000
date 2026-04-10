@@ -345,7 +345,14 @@ class Tracker:
             print("tid:", tid, "votes:", state["votes"])
             # Given enough votes and tid not being a confirmed helmet
             if len(state["votes"]) >= self.ocr_votes_count and tid not in self.helmet_numbers_final:
+
+                #uniksjekk
                 final_number = Counter(state["votes"]).most_common(1)[0][0]
+                if final_number in self.helmet_numbers_final.values():
+                    print(f"Tracker {tid}: #{final_number} allerede i bruk — avvist, prøver igjen.")
+                    state["votes"].clear()
+                    state["runs"] = 0
+                    continue
                 self.helmet_numbers_final[tid] = final_number
                 print(f"Tracker {tid} final helmet number: {final_number}")
 
