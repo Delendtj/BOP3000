@@ -354,8 +354,8 @@ class Tracker:
             number = self._match_partial(number)
 
             if number == "" or number is None:
-                print("Number didn't match accepted numbers...")
-                pass
+                print("Number didn't natch accepted numbers...")
+                continue
 
             state["votes"].append(number)
 
@@ -409,6 +409,7 @@ class Tracker:
         return annotated
 
     def _match_partial(self, partial):
+        print("Input into _match_partial() from OCR = ", partial)
         # Needs to be longer than 2
         if len(partial) < 2:
             return None

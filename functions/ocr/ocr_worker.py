@@ -95,14 +95,17 @@ def _ocr_process_main(
             if "shm_slot" in item:
                 image = ring.read(item["shm_slot"], item["shm_h"], item["shm_w"]).copy()
 
-            # Default result
+            # Default empty result
+            empty_result = {
+                "track_id": tid,
+                "bbox": bbox,
+                "helmet_number": "",
+                "ocr_conf": 0.0,
+            }
+
             if image is None:
-                result = {
-                    "track_id": tid,
-                    "bbox": bbox,
-                    "helmet_number": "",
-                    "ocr_conf": 0.0,
-                }
+                result = empty_result
+
                 # Bool returns for stat logs
                 ok, dropped = _drop_oldest_and_put(out_queue, result)
                 if ok:
@@ -120,24 +123,32 @@ def _ocr_process_main(
 
             try:
                 out = register_helmet([helmet], debug=False)
+                print(
+                    "[ocr-worker] register_helmet output:",
+                    {
+                        "track_id": tid,
+                        "bbox": bbox,
+                        "crop_shape": tuple(image.shape) if isinstance(image, np.ndarray) else None,
+                        "raw_output": out,
+                    },
+                )
                 if not out:
                     _inc(stats["ocr_empty_return"])
 
                 # Give empty default if the register_helmet returns nothing
-                result = out[0] if out else {
-                    "track_id": tid,
-                    "bbox": bbox,
-                    "helmet_number": "",
-                    "ocr_conf": 0.0,
-                }
+                result = out[0] if out else empty_result
+                print(
+                    "[ocr-worker] emitted result:",
+                    {
+                        "track_id": result.get("track_id", tid),
+                        "helmet_number": result.get("helmet_number", ""),
+                        "ocr_conf": result.get("ocr_conf", 0.0),
+                    },
+                )
             except Exception:
                 _inc(stats["ocr_errors"])
-                result = {
-                    "track_id": tid,
-                    "bbox": bbox,
-                    "helmet_number": "",
-                    "ocr_conf": 0.0,
-                }
+                print("[ocr-worker] register_helmet raised for track_id:", tid)
+                result = empty_result
 
             # Logging for stats
             ok, dropped = _drop_oldest_and_put(out_queue, result)
@@ -321,6 +332,17 @@ class OCRWorker:
         accepted, dropped = _drop_oldest_and_put(self.ocr_in_queue, payload)
         if accepted:
             _inc(self._stats["in_enqueued"])
+            print(
+                "[ocr-worker] submit:",
+                {
+                    "track_id": payload.get("track_id"),
+                    "bbox": payload.get("bbox"),
+                    "has_inline_image": "image" in payload and payload.get("image") is not None,
+                    "shm_slot": payload.get("shm_slot"),
+                    "shm_h": payload.get("shm_h"),
+                    "shm_w": payload.get("shm_w"),
+                },
+            )
         if dropped:
             _inc(self._stats["in_dropped_oldest"])
         return accepted
@@ -333,7 +355,16 @@ class OCRWorker:
         items: List[Dict[str, Any]] = []
         for _ in range(max_items):
             try:
-                items.append(self.ocr_out_queue.get_nowait())
+                item = self.ocr_out_queue.get_nowait()
+                print(
+                    "[ocr-worker] drain result:",
+                    {
+                        "track_id": item.get("track_id"),
+                        "helmet_number": item.get("helmet_number"),
+                        "ocr_conf": item.get("ocr_conf"),
+                    },
+                )
+                items.append(item)
             except Empty:
                 break
         if items:

@@ -195,11 +195,6 @@ def main(config):
                         max_person_top_below_ratio=close_helmet_person_max_below_ratio,
                     )
 
-                    print(
-                        "[ocr-debug] helmet_person_matches=",
-                        len(helmet_person_matches) if helmet_person_matches is not None else 0,
-                    )
-
                     # Draws the line between top center of the matching helmet and person bboxes.
                     draw_match_lines(
                         close_vis,

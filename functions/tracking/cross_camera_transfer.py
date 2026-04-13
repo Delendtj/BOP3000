@@ -62,14 +62,22 @@ def build_close_to_wide_mapping(
 def build_helmet_crops_for_wide_ids(
     close_helmets: sv.Detections,
     close_frame,
-    helmet_person_matches: Iterable[tuple[int, int, float]],
+    helmet_person_matches_close: Iterable[tuple[int, int, float]],
     close_to_wide_tid: dict[int, int],
 ) -> list[dict]:
+    """
+    Extract helmets input helmet detections, and returns crops
+    if they are connected within helmet_person_matches
+    
+    Params:
+    helmet_person_matches_close = close helmet -> close person
+    close_to_wide_tid = close person -> wide person id
+    """
     crops = []
     if close_helmets is None or close_frame is None:
         return crops
 
-    for helmet_idx, person_idx, _ in helmet_person_matches:
+    for helmet_idx, person_idx, _ in helmet_person_matches_close:
         wide_tid = close_to_wide_tid.get(person_idx)
         if wide_tid is None:
             continue
@@ -82,7 +90,7 @@ def build_helmet_crops_for_wide_ids(
             continue
         crops.append(
             {
-                "image": close_frame[y1:y2, x1:x2].copy(),
+                "image": close_frame[y1:y2, x1:x2].copy(), # Cropped image
                 "bbox": (x1, y1, x2, y2),
                 "conf": float(close_helmets.confidence[helmet_idx]),
                 "track_id": wide_tid,
