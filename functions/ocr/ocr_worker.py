@@ -104,14 +104,14 @@ def _ocr_process_main(
             }
 
             if image is None:
-                result = empty_result
+                #result = empty_result
 
                 # Bool returns for stat logs
-                ok, dropped = _drop_oldest_and_put(out_queue, result)
-                if ok:
-                    _inc(stats["out_enqueued"])
-                if dropped:
-                    _inc(stats["out_dropped_oldest"])
+                #ok, dropped = _drop_oldest_and_put(out_queue, result)
+                #if ok:
+                #    _inc(stats["out_enqueued"])
+                #if dropped:
+                #    _inc(stats["out_dropped_oldest"])
                 continue
 
             helmet = {
@@ -126,8 +126,10 @@ def _ocr_process_main(
                 if not out:
                     _inc(stats["ocr_empty_return"])
 
-                # Give empty default if the register_helmet returns nothing
-                result = out[0] if out else empty_result
+                if out[0]:
+                    result = out[0]
+                else:
+                    continue
                 print(
                     "[ocr-worker] emitted result:",
                     {
@@ -304,22 +306,30 @@ class OCRWorker:
             if img.ndim == 2:
                 # Make grayscale images into BGR (2 channels -> 3 channels)
                 img = np.repeat(img[:, :, None], 3, axis=2)
+
             if img.ndim != 3 or img.shape[2] != self._shm_channels:
                 _inc(self._stats["shm_oversize_drop"])
-                payload["image"] = None
+                #payload["image"] = None
                 print("Image wrong size was dropped!!")
+                return False
             elif img.shape[0] > self._shm_max_h or img.shape[1] > self._shm_max_w:
                 _inc(self._stats["shm_oversize_drop"])
-                payload["image"] = None
+                #payload["image"] = None
                 print("Image crop is too big and was dropped!!")
+                return False
             else:
+                # We write it inside the image in the shm, because this is the heavy data.
                 slot, h, w = self._ring.write(img)
                 payload.pop("image", None)
                 payload["shm_slot"] = slot
                 payload["shm_h"] = h
                 payload["shm_w"] = w
                 _inc(self._stats["shm_write_ok"])
+        else:
+            # This means we never enqueue only metadata, only when we get an image input.
+            return False
 
+        # We enqueue lightweight metadata
         accepted, dropped = _drop_oldest_and_put(self.ocr_in_queue, payload)
         if accepted:
             _inc(self._stats["in_enqueued"])
