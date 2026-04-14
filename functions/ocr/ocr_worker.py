@@ -123,15 +123,6 @@ def _ocr_process_main(
 
             try:
                 out = register_helmet([helmet], debug=False)
-                print(
-                    "[ocr-worker] register_helmet output:",
-                    {
-                        "track_id": tid,
-                        "bbox": bbox,
-                        "crop_shape": tuple(image.shape) if isinstance(image, np.ndarray) else None,
-                        "raw_output": out,
-                    },
-                )
                 if not out:
                     _inc(stats["ocr_empty_return"])
 
@@ -332,17 +323,17 @@ class OCRWorker:
         accepted, dropped = _drop_oldest_and_put(self.ocr_in_queue, payload)
         if accepted:
             _inc(self._stats["in_enqueued"])
-            print(
-                "[ocr-worker] submit:",
-                {
-                    "track_id": payload.get("track_id"),
-                    "bbox": payload.get("bbox"),
-                    "has_inline_image": "image" in payload and payload.get("image") is not None,
-                    "shm_slot": payload.get("shm_slot"),
-                    "shm_h": payload.get("shm_h"),
-                    "shm_w": payload.get("shm_w"),
-                },
-            )
+            #print(
+            #    "[ocr-worker] submit:",
+            #    {
+            #        "track_id": payload.get("track_id"),
+            #        "bbox": payload.get("bbox"),
+            #        "has_inline_image": "image" in payload and payload.get("image") is not None,
+            #        "shm_slot": payload.get("shm_slot"),
+            #        "shm_h": payload.get("shm_h"),
+            #        "shm_w": payload.get("shm_w"),
+            #    },
+            #)
         if dropped:
             _inc(self._stats["in_dropped_oldest"])
         return accepted
