@@ -120,6 +120,9 @@ class Tracker:
     def reset_lap_counts(self):
         self.lap_counter.reset()
 
+    def is_person_confirmed(self, track_id: int) -> bool:
+        return int(track_id) in self.people_hnum_final
+
     def get_lap_count(self, track_id):
         return self.lap_counter.get_lap_count(track_id)
 
@@ -409,14 +412,19 @@ class Tracker:
         return annotated
 
     def _match_partial(self, partial):
-        print("Input into _match_partial() from OCR = ", partial)
+        print("[TRACKER._match_partial] Input from OCR = ", repr(partial))
         # Needs to be longer than 2
         if len(partial) < 2:
+            print(f"[TRACKER._match_partial] Rejected: length={len(partial)} < 2")
             return None
         if self.accepted_numbers is None:
+            print(f"[TRACKER._match_partial] No accepted_numbers, returning partial as-is: {repr(partial)}")
             return partial
 
         # Loops over accepted numbers and keep those where partial is a substring of n.
         candidates = [n for n in self.accepted_numbers if partial in n]
+        print(f"[TRACKER._match_partial] partial={repr(partial)}, candidates={candidates}")
         # If the candidate is only one then we return it. Else it's too ambiguous.
-        return candidates[0] if len(candidates) == 1 else None
+        result = candidates[0] if len(candidates) == 1 else None
+        print(f"[TRACKER._match_partial] Result: {repr(result)}")
+        return result

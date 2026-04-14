@@ -237,6 +237,9 @@ def main(config):
                 # Give associated helmet crops to the ocr_worker
                 # The ocr_worker will then perform ocr on the crops.
                 for h in helmet_crops:
+                    if context.tracker.is_person_confirmed(h["track_id"]):
+                        print(f"[ocr-debug] skipping confirmed track_id={h['track_id']}")
+                        continue
                     context.ocr_worker.submit(h)
 
             # Evaluate if the detection is good enough to be set for tracks

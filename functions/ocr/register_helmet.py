@@ -6,17 +6,25 @@ Designed to work with the multiprocessing architecture in ocr_worker.py.
 """
 
 import logging
+import os
 from pathlib import Path
 from typing import List, Optional
 
 import cv2
 import numpy as np
+
+# Apply Paddle runtime workarounds before importing paddleocr in the worker process.
+os.environ.setdefault("PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK", "True")
+os.environ.setdefault("FLAGS_use_mkldnn", "0")
+os.environ.setdefault("FLAGS_enable_pir_in_executor", "0")
+
 from paddleocr import PaddleOCR
 
 # Threshold for upscaling small images
 UPSCALE_THRESH = 60
 PREPROCESS_LOG_DIR = Path("output/ocr_preprocess_logs")
 PREPROCESS_LOG_MAX_IMAGES = 20
+DEBUG_OCR_LOGS_DIR = Path("output/ocr_debug_images")
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -24,6 +32,7 @@ logger = logging.getLogger(__name__)
 # Global PaddleOCR instance - initialized once per process
 _ocr: Optional[PaddleOCR] = None
 _preprocess_log_index = 0
+_debug_image_counter = 0
 
 
 def _get_ocr_instance() -> PaddleOCR:
@@ -36,6 +45,7 @@ def _get_ocr_instance() -> PaddleOCR:
             use_doc_orientation_classify=False,
             use_doc_unwarping=False,
             use_textline_orientation=False,
+            enable_mkldnn=False,
         )
     return _ocr
 
@@ -71,9 +81,16 @@ def register_helmet(helmets: List[dict], debug: bool = False) -> List[dict]:
             raw = ocr.predict(processed_img)
 
             number_str, ocr_conf, raw_texts, raw_scores = _extract_digits_from_ocr(raw)
-            _log_preprocessing_pair(
-                before=img,
-                after=processed_img,
+            crop_h, crop_w = img.shape[:2]
+            print(
+                f"[OCR RESULT] track_id={tid}, crop={crop_w}x{crop_h}, "
+                f"extracted='{number_str}', conf={ocr_conf:.1f}%, raw_texts={raw_texts}"
+            )
+
+            # Save detailed debug images for every frame (not just successful extractions)
+            _save_ocr_debug_images(
+                original=img,
+                preprocessed=processed_img,
                 track_id=tid,
                 raw_texts=raw_texts,
                 raw_scores=raw_scores,
@@ -85,7 +102,10 @@ def register_helmet(helmets: List[dict], debug: bool = False) -> List[dict]:
                 logger.debug(f"Number accepted: {number_str} for track_id: {tid}")
 
         except Exception as e:
-            logger.error(f"OCR error for track_id {tid}: {e}")
+            logger.warning(
+                f"OCR failed for track_id {tid}: "
+                f"{type(e).__name__}({e})"
+            )
             number_str = ""
             ocr_conf = 0.0
 
@@ -121,7 +141,6 @@ def _extract_digits_from_ocr(
 
 
     for res in raw:
-        print("Raw output from PaddleOCR: txt = ", res.get("rec_texts"), " conf = ", res.get("rec_scores"))
         if isinstance(res, dict):
             rec_texts = res.get("rec_texts") or []
             rec_scores = res.get("rec_scores") or []
@@ -252,3 +271,63 @@ def _resize_to_height(image: np.ndarray, target_h: int) -> np.ndarray:
     scale = target_h / image.shape[0]
     target_w = max(1, int(round(image.shape[1] * scale)))
     return cv2.resize(image, (target_w, target_h), interpolation=cv2.INTER_NEAREST)
+
+
+def _save_ocr_debug_images(
+    original: np.ndarray,
+    preprocessed: np.ndarray,
+    track_id: int,
+    raw_texts: List[str],
+    raw_scores: List[float],
+    digits: str,
+    ocr_conf: float,
+) -> None:
+    """Save detailed debug images showing OCR pipeline stages."""
+    global _debug_image_counter
+
+    DEBUG_OCR_LOGS_DIR.mkdir(parents=True, exist_ok=True)
+
+    # Convert to BGR if needed (grayscale -> BGR)
+    orig_bgr = original if original.ndim == 3 else cv2.cvtColor(original, cv2.COLOR_GRAY2BGR)
+    proc_bgr = preprocessed if preprocessed.ndim == 3 else cv2.cvtColor(preprocessed, cv2.COLOR_GRAY2BGR)
+
+    # Resize to common height for side-by-side display
+    target_h = max(orig_bgr.shape[0], proc_bgr.shape[0])
+    orig_panel = _resize_to_height(orig_bgr, target_h)
+    proc_panel = _resize_to_height(proc_bgr, target_h)
+
+    # Create combined image: original | preprocessed
+    separator = np.full((target_h, 16, 3), 80, dtype=np.uint8)
+    combined = np.hstack((orig_panel, separator, proc_panel))
+
+    footer_h = 120
+    footer = np.full((footer_h, combined.shape[1], 3), 10, dtype=np.uint8)
+
+    # Raw OCR output info
+    raw_pairs = [f"{text or '<empty>'} ({score:.2f})" for text, score in zip(raw_texts, raw_scores)]
+    raw_label = ", ".join(raw_pairs) if raw_pairs else "<none>"
+
+    cv2.putText(footer, f"track_id: {track_id}", (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1, cv2.LINE_AA)
+    cv2.putText(footer, f"raw OCR: {raw_label[:180]}", (10, 48), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1, cv2.LINE_AA)
+    cv2.putText(
+        footer,
+        f"digits: {digits or '<empty>'}   conf: {ocr_conf:.1f}%",
+        (10, 74),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.65,
+        (0, 255, 255) if digits else (0, 180, 180),
+        1,
+        cv2.LINE_AA,
+    )
+
+    # Image dimensions
+    orig_h, orig_w = original.shape[:2]
+    proc_h, proc_w = preprocessed.shape[:2]
+    cv2.putText(footer, f"orig: {orig_w}x{orig_h}, proc: {proc_w}x{proc_h}", (10, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (180, 180, 180), 1, cv2.LINE_AA)
+
+    combined = np.vstack((combined, footer))
+
+    # Save with unique filename
+    output_path = DEBUG_OCR_LOGS_DIR / f"ocr_debug_{_debug_image_counter:04d}_tid{track_id}.png"
+    cv2.imwrite(str(output_path), combined)
+    _debug_image_counter += 1
