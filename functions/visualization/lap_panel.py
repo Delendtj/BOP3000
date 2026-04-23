@@ -65,7 +65,7 @@ def render_lap_panel(height, width, lap_rows, finish_line_ready, total_laps):
         cv2.rectangle(panel, (16, y - 28), (width - 16, y + 16), (45, 45, 45), -1)
         cv2.putText(
             panel,
-            f"ID {row['track_id']}",
+            f"ID {row['display_id']}",
             (28, y),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.8,
@@ -126,7 +126,7 @@ def update_lap_panel_state(state: LapPanelState, *, tracker, finish_line, height
         finish_line is not None,
         int(tracker.total_laps),
         tuple(
-            (row["track_id"], row["lap_count"], row["predicted"])
+            (row["track_id"], row["display_id"], row["lap_count"], row["predicted"])
             for row in lap_rows
         ),
     )

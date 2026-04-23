@@ -49,16 +49,21 @@ def _ocr_process_main(
     shm_max_w: int,
     shm_channels: int,
     shm_dtype: str,
+    base_url: str,
+    model: str,
+    prompt: str,
+    timeout: float,
 ) -> None:
     """
     OCR worker main loop.
 
-    PaddleOCR is initialized in this process context by importing register_helmet
-    here (not in parent process), which avoids serialization/pickling issues.
-
-    Currently, it has a lot of room for silent errors and returning empty images.
+    GLM-OCR client is initialized in this process context (spawn mode requires
+    re-init), avoiding serialization/pickling issues.
     """
-    from functions.ocr.register_helmet import register_helmet
+    from functions.ocr.register_helmet import register_helmet, init_ocr_client
+
+    # Init GLM-OCR client for spawned worker process
+    init_ocr_client(base_url, model)
 
     # We already make a shared memory in start()
     # We then connect to that same memory space by having create=False and correct name=shm_name input param
@@ -122,7 +127,14 @@ def _ocr_process_main(
             }
 
             try:
-                out = register_helmet([helmet], debug=False)
+                out = register_helmet(
+                    [helmet],
+                    base_url=base_url,
+                    model=model,
+                    prompt=prompt,
+                    timeout=timeout,
+                    debug=False,
+                )
                 if not out:
                     _inc(stats["ocr_empty_return"])
 
@@ -173,6 +185,10 @@ class OCRWorker:
         shm_max_w: int = 256,
         shm_channels: int = 3,
         shm_dtype: str = "uint8",
+        ocr_base_url: str = "http://127.0.0.1:1234/v1",
+        ocr_model: str = "glm-ocr",
+        ocr_prompt: str = "Return ONLY the numbers visible on this helmet. Output digits only, no punctuation or explanation. If no number is visible, output unknown.",
+        ocr_timeout: float = 5.0,
     ):
         self._ctx = mp.get_context(start_method)
         self.max_in_size = max_in_size
@@ -188,6 +204,10 @@ class OCRWorker:
         self._shm_max_w = int(shm_max_w)
         self._shm_channels = int(shm_channels)
         self._shm_dtype = str(shm_dtype)
+        self._ocr_base_url = ocr_base_url
+        self._ocr_model = ocr_model
+        self._ocr_prompt = ocr_prompt
+        self._ocr_timeout = ocr_timeout
 
         # Simply counters for benchmarking
         self._stats: Dict[str, Any] = {
@@ -244,6 +264,10 @@ class OCRWorker:
                 self._shm_max_w,
                 self._shm_channels,
                 self._shm_dtype,
+                self._ocr_base_url,
+                self._ocr_model,
+                self._ocr_prompt,
+                self._ocr_timeout,
             ),
             daemon=False,
         )

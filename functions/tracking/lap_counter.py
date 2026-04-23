@@ -19,6 +19,13 @@ def bbox_bottom_right(bbox):
     return (float(x2), float(y2))
 
 
+def display_sort_key(value):
+    try:
+        return (0, int(value))
+    except (TypeError, ValueError):
+        return (1, str(value))
+
+
 def line_side_value(point, line):
     # Preserve the original signed-side helper for geometry tests.
     if line is None or len(line) != 2 or point is None:
@@ -161,14 +168,19 @@ class LapCounter:
             tid = int(tid)
             if tid == -1:
                 continue
+            helmet_number = -1
+            if "helmet_number" in people_tracks.data:
+                helmet_number = people_tracks.data["helmet_number"][i]
+            display_id = helmet_number if helmet_number not in (-1, None, "") else tid
             rows.append(
                 {
                     "track_id": tid,
+                    "display_id": display_id,
                     "lap_count": self.get_lap_count(tid),
                     "predicted": bool(people_tracks.confidence[i] == 0),
                 }
             )
-        rows.sort(key=lambda row: row["track_id"])
+        rows.sort(key=lambda row: display_sort_key(row["display_id"]))
         return rows
 
     def update(self, people_tracks):

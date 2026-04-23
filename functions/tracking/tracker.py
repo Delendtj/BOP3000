@@ -340,6 +340,10 @@ class Tracker:
             if tid == -1:
                 continue
 
+            # If track is already confirmed, skip OCR processing entirely.
+            if tid in self.people_hnum_final:
+                continue
+
             state = self.ocr_runs[tid]
 
             # Increments the cooldown if its active, and resets if it ran certain amount of times.
@@ -395,10 +399,14 @@ class Tracker:
         if len(self.people_tracks) > 0:
             labels = []
             for i, tid in enumerate(self.people_tracks.tracker_id):
+                helmet_number = -1
+                if "helmet_number" in self.people_tracks.data:
+                    helmet_number = self.people_tracks.data["helmet_number"][i]
+                display_id = helmet_number if helmet_number not in (-1, None, "") else tid
                 if self.people_tracks.confidence[i] == 0:
-                    labels.append(f"ID {tid} (pred)")
+                    labels.append(f"ID {display_id} (pred)")
                 else:
-                    labels.append(f"ID {tid}")
+                    labels.append(f"ID {display_id}")
             annotated = self.label_annotator.annotate(annotated, self.people_tracks, labels=labels)
 
         # Old code for annotating helmets.

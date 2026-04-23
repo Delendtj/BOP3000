@@ -128,7 +128,13 @@ def initialize(config, *, dashboard_window_name: str) -> AppContext | None:
         inference_roi=close_yolo_roi,
     )
 
-    ocr_worker = OCRWorker()
+    ocr_config = config.get("OCR", {})
+    ocr_worker = OCRWorker(
+        ocr_base_url=ocr_config.get("BASE_URL"),
+        ocr_model=ocr_config.get("MODEL"),
+        ocr_prompt=ocr_config.get("PROMPT"),
+        ocr_timeout=ocr_config.get("TIMEOUT"),
+    )
     ocr_worker.start()
     pipeline.start()
     pipeline_close.start()

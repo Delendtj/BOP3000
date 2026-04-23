@@ -74,6 +74,13 @@ def create_config(path):
         "lap_window_name": "Lap Count"
     }
 
+    config["OCR"] = {
+        "BASE_URL": "http://127.0.0.1:1234",
+        "MODEL": "glm-ocr",
+        "PROMPT": "Return ONLY the numbers visible on this helmet. Output digits only, no punctuation or explanation. If no number is visible, output unknown.",
+        "TIMEOUT": "5",
+    }
+
     with open(path, "w", encoding="utf-8") as config_file:
         config.write(config_file)
 
@@ -143,5 +150,11 @@ def load_config(path):
             "multi_cam_window_name": config["Rink"]["multi_cam_window_name"],
             "rink_window_name": config["Rink"]["rink_window_name"],
             "lap_window_name": config["Rink"]["lap_window_name"],
+        },
+        "OCR": {
+            "BASE_URL": config.get("OCR", "BASE_URL", fallback="http://127.0.0.1:1234/v1"),
+            "MODEL": config.get("OCR", "MODEL", fallback="glm-ocr"),
+            "PROMPT": config.get("OCR", "PROMPT", fallback="Return ONLY the numbers visible on this helmet. Output digits only, no punctuation or explanation. If no number is visible, output unknown."),
+            "TIMEOUT": config.getfloat("OCR", "TIMEOUT", fallback=5.0),
         },
     }
