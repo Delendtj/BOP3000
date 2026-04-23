@@ -7,6 +7,7 @@ Designed to work with the multiprocessing architecture in ocr_worker.py.
 
 import logging
 import os
+import re
 from pathlib import Path
 from typing import List, Optional
 
@@ -22,16 +23,15 @@ from paddleocr import PaddleOCR
 
 # Threshold for upscaling small images
 UPSCALE_THRESH = 60
-PREPROCESS_LOG_DIR = Path("output/ocr_preprocess_logs")
 PREPROCESS_LOG_MAX_IMAGES = 20
-DEBUG_OCR_LOGS_DIR = Path("output/ocr_debug_images")
+DEBUG_OCR_ORIGINAL_DIR = Path("output/ocr_debug_original")
+DEBUG_OCR_PROCESSED_DIR = Path("output/ocr_debug_processed")
 
 # Configure logging
 logger = logging.getLogger(__name__)
 
 # Global PaddleOCR instance - initialized once per process
 _ocr: Optional[PaddleOCR] = None
-_preprocess_log_index = 0
 _debug_image_counter = 0
 
 
@@ -87,7 +87,7 @@ def register_helmet(helmets: List[dict], debug: bool = False) -> List[dict]:
                 f"extracted='{number_str}', conf={ocr_conf:.1f}%, raw_texts={raw_texts}"
             )
 
-            # Save detailed debug images for every frame (not just successful extractions)
+            # Save original and preprocessed crops in separate rotating folders.
             _save_ocr_debug_images(
                 original=img,
                 preprocessed=processed_img,
@@ -202,77 +202,6 @@ def preprocess_image(image: np.ndarray) -> np.ndarray:
     return cv2.cvtColor(sharpened, cv2.COLOR_GRAY2BGR)
 
 
-def _log_preprocessing_pair(
-    before: np.ndarray,
-    after: np.ndarray,
-    track_id: int,
-    raw_texts: List[str],
-    raw_scores: List[float],
-    digits: str,
-    ocr_conf: float,
-) -> None:
-    """Write one rotating debug image that shows raw and preprocessed crops side by side."""
-    global _preprocess_log_index
-
-    PREPROCESS_LOG_DIR.mkdir(parents=True, exist_ok=True)
-
-    before_bgr = before if before.ndim == 3 else cv2.cvtColor(before, cv2.COLOR_GRAY2BGR)
-    after_bgr = after if after.ndim == 3 else cv2.cvtColor(after, cv2.COLOR_GRAY2BGR)
-
-    target_h = max(before_bgr.shape[0], after_bgr.shape[0])
-    before_panel = _resize_to_height(before_bgr, target_h)
-    after_panel = _resize_to_height(after_bgr, target_h)
-
-    separator = np.full((target_h, 8, 3), 32, dtype=np.uint8)
-    combined = np.hstack((before_panel, separator, after_panel))
-    footer_h = 88
-    footer = np.full((footer_h, combined.shape[1], 3), 18, dtype=np.uint8)
-
-    # cv2.putText(combined, "before", (8, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 255), 2, cv2.LINE_AA)
-    #cv2.putText(
-    #    combined,
-    #    "after",
-    #    cv2.FONT_HERSHEY_SIMPLEX,
-    #    0.7,
-    #    (0, 255, 255),
-    #    2,
-    #    cv2.LINE_AA,
-    #)
-
-    raw_pairs = [f"{text or '<empty>'} ({score:.2f})" for text, score in zip(raw_texts, raw_scores)]
-    raw_label = ", ".join(raw_pairs) if raw_pairs else "<none>"
-
-    cv2.putText(footer, f"track_id: {track_id}", (8, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1, cv2.LINE_AA)
-    cv2.putText(footer, f"raw: {raw_label[:140]}", (8, 46), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1, cv2.LINE_AA)
-    cv2.putText(
-        footer,
-        f"digits: {digits or '<empty>'}   conf: {ocr_conf:.1f}",
-        (8, 70),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.55,
-        (0, 255, 255),
-        1,
-        cv2.LINE_AA,
-    )
-
-    combined = np.vstack((combined, footer))
-
-    file_index = _preprocess_log_index % PREPROCESS_LOG_MAX_IMAGES
-    output_path = PREPROCESS_LOG_DIR / f"preprocess_{file_index:02d}.png"
-    cv2.imwrite(str(output_path), combined)
-    _preprocess_log_index += 1
-
-
-def _resize_to_height(image: np.ndarray, target_h: int) -> np.ndarray:
-    """Resize an image to the target height while keeping aspect ratio."""
-    if image.shape[0] == target_h:
-        return image
-
-    scale = target_h / image.shape[0]
-    target_w = max(1, int(round(image.shape[1] * scale)))
-    return cv2.resize(image, (target_w, target_h), interpolation=cv2.INTER_NEAREST)
-
-
 def _save_ocr_debug_images(
     original: np.ndarray,
     preprocessed: np.ndarray,
@@ -282,52 +211,35 @@ def _save_ocr_debug_images(
     digits: str,
     ocr_conf: float,
 ) -> None:
-    """Save detailed debug images showing OCR pipeline stages."""
+    """Save original and preprocessed OCR crops in separate rotating folders."""
     global _debug_image_counter
 
-    DEBUG_OCR_LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    DEBUG_OCR_ORIGINAL_DIR.mkdir(parents=True, exist_ok=True)
+    DEBUG_OCR_PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
 
-    # Convert to BGR if needed (grayscale -> BGR)
     orig_bgr = original if original.ndim == 3 else cv2.cvtColor(original, cv2.COLOR_GRAY2BGR)
     proc_bgr = preprocessed if preprocessed.ndim == 3 else cv2.cvtColor(preprocessed, cv2.COLOR_GRAY2BGR)
 
-    # Resize to common height for side-by-side display
-    target_h = max(orig_bgr.shape[0], proc_bgr.shape[0])
-    orig_panel = _resize_to_height(orig_bgr, target_h)
-    proc_panel = _resize_to_height(proc_bgr, target_h)
+    file_index = _debug_image_counter % PREPROCESS_LOG_MAX_IMAGES
+    metadata = _format_debug_suffix(track_id, raw_texts, raw_scores, digits, ocr_conf)
 
-    # Create combined image: original | preprocessed
-    separator = np.full((target_h, 16, 3), 80, dtype=np.uint8)
-    combined = np.hstack((orig_panel, separator, proc_panel))
+    original_path = DEBUG_OCR_ORIGINAL_DIR / f"ocr_orig_{file_index:02d}_tid{track_id}{metadata}.png"
+    processed_path = DEBUG_OCR_PROCESSED_DIR / f"ocr_proc_{file_index:02d}_tid{track_id}{metadata}.png"
 
-    footer_h = 120
-    footer = np.full((footer_h, combined.shape[1], 3), 10, dtype=np.uint8)
-
-    # Raw OCR output info
-    raw_pairs = [f"{text or '<empty>'} ({score:.2f})" for text, score in zip(raw_texts, raw_scores)]
-    raw_label = ", ".join(raw_pairs) if raw_pairs else "<none>"
-
-    cv2.putText(footer, f"track_id: {track_id}", (10, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 1, cv2.LINE_AA)
-    cv2.putText(footer, f"raw OCR: {raw_label[:180]}", (10, 48), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1, cv2.LINE_AA)
-    cv2.putText(
-        footer,
-        f"digits: {digits or '<empty>'}   conf: {ocr_conf:.1f}%",
-        (10, 74),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.65,
-        (0, 255, 255) if digits else (0, 180, 180),
-        1,
-        cv2.LINE_AA,
-    )
-
-    # Image dimensions
-    orig_h, orig_w = original.shape[:2]
-    proc_h, proc_w = preprocessed.shape[:2]
-    cv2.putText(footer, f"orig: {orig_w}x{orig_h}, proc: {proc_w}x{proc_h}", (10, 100), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (180, 180, 180), 1, cv2.LINE_AA)
-
-    combined = np.vstack((combined, footer))
-
-    # Save with unique filename
-    output_path = DEBUG_OCR_LOGS_DIR / f"ocr_debug_{_debug_image_counter:04d}_tid{track_id}.png"
-    cv2.imwrite(str(output_path), combined)
+    cv2.imwrite(str(original_path), orig_bgr)
+    cv2.imwrite(str(processed_path), proc_bgr)
     _debug_image_counter += 1
+
+
+def _format_debug_suffix(
+    track_id: int,
+    raw_texts: List[str],
+    raw_scores: List[float],
+    digits: str,
+    ocr_conf: float,
+) -> str:
+    raw_pairs = [f"{text or 'empty'}-{score:.2f}" for text, score in zip(raw_texts, raw_scores)]
+    raw_label = "_".join(raw_pairs) if raw_pairs else "none"
+    raw_label = re.sub(r"[^A-Za-z0-9_.-]+", "-", raw_label)[:80]
+    digits_label = digits if digits else "empty"
+    return f"_digits-{digits_label}_conf-{ocr_conf:.1f}_raw-{raw_label}"

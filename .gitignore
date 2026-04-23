@@ -13,3 +13,4 @@ __pycache__/
 output/*
 data/config.ini
 output/*
+.codex

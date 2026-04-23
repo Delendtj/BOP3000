@@ -1,33 +1,37 @@
 from __future__ import annotations
 
 # CLI examples:
-# python tests/test_qwen_ocr.py output/ocr_debug_images
-# python tests/test_qwen_ocr.py output/ocr_debug_images --device cuda
-# python tests/test_qwen_ocr.py output/ocr_debug_images --limit 100 --print-every 10
-# python tests/test_qwen_ocr.py output/ocr_debug_images --pause-ms 50
-# python tests/test_qwen_ocr.py output/ocr_debug_images --model Qwen/Qwen3-VL-2B-Instruct
+# python tests/test_paddle_ocr.py output/ocr_debug_images
+# python tests/test_paddle_ocr.py output/ocr_debug_images --limit 100 --print-every 10
+# python tests/test_paddle_ocr.py output/ocr_debug_images --pause-ms 50
 
 import argparse
+import os
 import re
 import statistics
 import time
 from datetime import datetime
 from pathlib import Path
 
+os.environ["PADDLE_PDX_DISABLE_MODEL_SOURCE_CHECK"] = "True"
+# os.environ["PADDLE_PDX_ENABLE_MKLDNN_BYDEFAULT"] = "0" # Disabled because isn't included in original.
+os.environ["FLAGS_use_mkldnn"] = "0"
+os.environ["FLAGS_enable_pir_in_executor"] = "0"
+# os.environ.setdefault("CUDA_VISIBLE_DEVICES", "")
+
 import cv2
-import torch
-from transformers import AutoModelForImageTextToText, AutoProcessor, BitsAndBytesConfig
+from paddleocr import PaddleOCR
 
 
-DEFAULT_MODEL_ID = "Qwen/Qwen3.5-0.8B"
-DEFAULT_PROMPT = "Reply with digits only. If unreadable, reply UNKNOWN."
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".webp"}
+DEFAULT_DET_MODEL = "PP-OCRv5_mobile_det"
+DEFAULT_REC_MODEL = "PP-OCRv5_mobile_rec"
 RESULTS_DIR = Path("output/ocr_benchmarks")
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Sequential benchmark for Qwen-VL helmet OCR on a directory of crops."
+        description="Sequential benchmark for PaddleOCR helmet OCR on a directory of crops."
     )
     parser.add_argument(
         "image_dir",
@@ -35,32 +39,20 @@ def parse_args() -> argparse.Namespace:
         help="Directory containing OCR crop images.",
     )
     parser.add_argument(
-        "--model",
-        default=DEFAULT_MODEL_ID,
-        help=f"Hugging Face model id. Default: {DEFAULT_MODEL_ID}",
+        "--det-model",
+        default=DEFAULT_DET_MODEL,
+        help=f"PaddleOCR text detection model. Default: {DEFAULT_DET_MODEL}",
     )
     parser.add_argument(
-        "--prompt",
-        default=DEFAULT_PROMPT,
-        help="Prompt used for each image.",
-    )
-    parser.add_argument(
-        "--max-new-tokens",
-        type=int,
-        default=10,
-        help="Generation limit per image.",
+        "--rec-model",
+        default=DEFAULT_REC_MODEL,
+        help=f"PaddleOCR text recognition model. Default: {DEFAULT_REC_MODEL}",
     )
     parser.add_argument(
         "--limit",
         type=int,
         default=None,
         help="Optional cap on number of images to process.",
-    )
-    parser.add_argument(
-        "--device",
-        default="auto",
-        choices=["auto", "cpu", "cuda"],
-        help="Device selection. 'auto' prefers CUDA when available.",
     )
     parser.add_argument(
         "--pause-ms",
@@ -77,14 +69,6 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def choose_device(requested: str) -> str:
-    if requested == "auto":
-        return "cuda" if torch.cuda.is_available() else "cpu"
-    if requested == "cuda" and not torch.cuda.is_available():
-        raise RuntimeError("CUDA requested but not available.")
-    return requested
-
-
 def load_image_paths(image_dir: Path, limit: int | None) -> list[Path]:
     if not image_dir.exists() or not image_dir.is_dir():
         raise FileNotFoundError(f"Image directory not found: {image_dir}")
@@ -97,108 +81,89 @@ def load_image_paths(image_dir: Path, limit: int | None) -> list[Path]:
         paths = paths[:limit]
     return paths
 
-def load_model(model_id: str, device: str):
-    processor = AutoProcessor.from_pretrained(model_id)
 
-    model_kwargs = {
-        "device_map": "auto" if device == "cuda" else device,
-    }
-    if device == "cuda":
-        quant_config = BitsAndBytesConfig(load_in_4bit=True)
-        model_kwargs["quantization_config"] = quant_config
-    else:
-        model_kwargs["dtype"] = torch.float32
-
-    model = AutoModelForImageTextToText.from_pretrained(
-        model_id,
-        **model_kwargs,
+def load_model(det_model: str, rec_model: str) -> PaddleOCR:
+    return PaddleOCR(
+        text_detection_model_name=det_model,
+        text_recognition_model_name=rec_model,
+        use_doc_orientation_classify=False,
+        use_doc_unwarping=False,
+        use_textline_orientation=False,
+        enable_mkldnn=False,
+        device="cpu",
     )
 
-    model.eval()
-    return processor, model
 
-
-def get_model_input_device(model, requested_device: str):
-    if requested_device == "cuda":
-        return getattr(model, "device", torch.device("cuda"))
-    return getattr(model, "device", torch.device("cpu"))
-
-
-def sync_device(device: str) -> None:
-    if device == "cuda":
-        torch.cuda.synchronize()
-
-
-def read_image_rgb(path: Path):
+def read_image_bgr(path: Path):
     image = cv2.imread(str(path), cv2.IMREAD_UNCHANGED)
     if image is None:
         raise ValueError(f"Failed to read image: {path}")
     if image.ndim == 2:
-        return cv2.cvtColor(image, cv2.COLOR_GRAY2RGB)
+        return cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
     if image.ndim == 3 and image.shape[2] == 3:
-        return cv2.cvtColor(image, cv2.COLOR_BGR2RGB)
+        return image
     if image.ndim == 3 and image.shape[2] == 4:
-        return cv2.cvtColor(image, cv2.COLOR_BGRA2RGB)
+        return cv2.cvtColor(image, cv2.COLOR_BGRA2BGR)
     raise ValueError(f"Unsupported image shape {image.shape} for {path}")
 
 
-def run_single_image(
-    image_rgb,
-    processor,
-    model,
-    prompt: str,
-    max_new_tokens: int,
-    device: str,
-) -> dict:
-    messages = [
-        {
-            "role": "user",
-            "content": [
-                {"type": "image", "image": image_rgb},
-                {"type": "text", "text": prompt},
-            ],
-        },
-    ]
+def extract_digits_from_ocr(raw) -> tuple[str, float, list[str], list[float]]:
+    number_str = ""
+    ocr_conf = 0.0
+    valid_texts: list[str] = []
+    valid_confs: list[float] = []
+    raw_texts_all: list[str] = []
+    raw_scores_all: list[float] = []
 
-    prep_start = time.perf_counter()
-    inputs = processor.apply_chat_template(
-        messages,
-        add_generation_prompt=True,
-        tokenize=True,
-        return_dict=True,
-        return_tensors="pt",
-    )
-    inputs = inputs.to(get_model_input_device(model, device))
-    sync_device(device)
-    prep_ms = (time.perf_counter() - prep_start) * 1000.0
+    for res in raw:
+        if isinstance(res, dict):
+            rec_texts = res.get("rec_texts") or []
+            rec_scores = res.get("rec_scores") or []
+        else:
+            rec_texts = getattr(res, "rec_texts", []) or []
+            rec_scores = getattr(res, "rec_scores", []) or []
+
+        for text, score in zip(rec_texts, rec_scores):
+            text_str = str(text).strip()
+            raw_texts_all.append(text_str)
+            raw_scores_all.append(float(score))
+            if not text_str:
+                continue
+            digits = "".join(ch for ch in text_str if ch.isdigit())
+            if not digits:
+                continue
+            valid_texts.append(digits)
+            valid_confs.append(float(score))
+
+    if valid_texts:
+        number_str = "".join(valid_texts).strip()
+        ocr_conf = (sum(valid_confs) / len(valid_confs)) * 100.0
+
+    return number_str, ocr_conf, raw_texts_all, raw_scores_all
+
+
+def run_single_image(image_bgr, ocr) -> dict:
+    prep_ms = 0.0
 
     infer_start = time.perf_counter()
-    with torch.no_grad():
-        outputs = model.generate(
-            **inputs,
-            max_new_tokens=max_new_tokens,
-            do_sample=False,
-        )
-    sync_device(device)
+    raw = ocr.predict(image_bgr)
     infer_ms = (time.perf_counter() - infer_start) * 1000.0
 
     decode_start = time.perf_counter()
-    prompt_len = inputs["input_ids"].shape[-1]
-    raw_text = processor.decode(
-        outputs[0][prompt_len:],
-        skip_special_tokens=True,
-    ).strip()
+    digits_only, ocr_conf, raw_texts, raw_scores = extract_digits_from_ocr(raw)
     decode_ms = (time.perf_counter() - decode_start) * 1000.0
 
-    digits_only = "".join(ch for ch in raw_text if ch.isdigit())
-    unknown = raw_text.strip().upper() == "UNKNOWN"
-    parse_ok = bool(re.fullmatch(r"\d+", raw_text))
+    raw_text = " | ".join(
+        f"{text or '<empty>'} ({score:.2f})" for text, score in zip(raw_texts, raw_scores)
+    ).strip()
+    parse_ok = digits_only.isdigit() if digits_only else False
 
     return {
         "raw_text": raw_text,
         "digits_only": digits_only,
-        "unknown": unknown,
+        "unknown": not bool(digits_only),
         "parse_ok": parse_ok,
+        "ocr_conf": ocr_conf,
         "prep_ms": prep_ms,
         "infer_ms": infer_ms,
         "decode_ms": decode_ms,
@@ -234,7 +199,7 @@ def format_summary(results: list[dict], elapsed_s: float) -> str:
         f"throughput: {len(results) / elapsed_s:.2f} img/s" if elapsed_s > 0 else "throughput: inf",
         f"strict digits-only outputs: {parse_ok}/{len(results)} ({(100.0 * parse_ok / len(results)):.1f}%)",
         f"outputs containing any digits: {with_digits}/{len(results)} ({(100.0 * with_digits / len(results)):.1f}%)",
-        f"unknown outputs: {unknown}/{len(results)} ({(100.0 * unknown / len(results)):.1f}%)",
+        f"empty outputs: {unknown}/{len(results)} ({(100.0 * unknown / len(results)):.1f}%)",
         "latency total ms: "
         f"mean={statistics.mean(totals):.1f} "
         f"median={statistics.median(totals):.1f} "
@@ -262,6 +227,7 @@ def format_result_details(results: list[dict]) -> str:
             f"file: {result['image_name']}",
             f"raw_text: {result['raw_text']}",
             f"digits_only: {result['digits_only']}",
+            f"ocr_conf: {result['ocr_conf']:.1f}",
             f"total_ms: {result['total_ms']:.1f} infer_ms: {result['infer_ms']:.1f}",
             "",
         ])
@@ -289,29 +255,20 @@ def write_results(model_name: str, image_dir: Path, summary: str, details: str) 
 
 def main() -> None:
     args = parse_args()
-    device = choose_device(args.device)
     image_paths = load_image_paths(args.image_dir, args.limit)
 
     if not image_paths:
         raise RuntimeError(f"No image files found in {args.image_dir}")
 
-    print(f"loading model: {args.model}")
-    print(f"device: {device}")
-    processor, model = load_model(args.model, device)
+    print(f"loading model: PaddleOCR det={args.det_model} rec={args.rec_model}")
+    ocr = load_model(args.det_model, args.rec_model)
 
     results = []
     wall_start = time.perf_counter()
 
     for idx, path in enumerate(image_paths, start=1):
-        image_rgb = read_image_rgb(path)
-        result = run_single_image(
-            image_rgb=image_rgb,
-            processor=processor,
-            model=model,
-            prompt=args.prompt,
-            max_new_tokens=args.max_new_tokens,
-            device=device,
-        )
+        image_bgr = read_image_bgr(path)
+        result = run_single_image(image_bgr=image_bgr, ocr=ocr)
         result["image_name"] = path.name
         results.append(result)
 
@@ -319,6 +276,7 @@ def main() -> None:
             print(
                 f"[{idx}/{len(image_paths)}] {path.name} "
                 f"raw={result['raw_text']!r} digits={result['digits_only']!r} "
+                f"conf={result['ocr_conf']:.1f} "
                 f"total_ms={result['total_ms']:.1f} infer_ms={result['infer_ms']:.1f}"
             )
 
@@ -329,7 +287,8 @@ def main() -> None:
     summary = format_summary(results, elapsed_s)
     details = format_result_details(results)
     print(f"\n{summary}")
-    result_path = write_results(args.model, args.image_dir, summary, details)
+    model_name = f"PaddleOCR_det={args.det_model}_rec={args.rec_model}"
+    result_path = write_results(model_name, args.image_dir, summary, details)
     print(f"\nresults saved to: {result_path}")
 
 

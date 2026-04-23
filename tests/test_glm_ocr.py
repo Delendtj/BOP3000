@@ -1,11 +1,11 @@
 from __future__ import annotations
 
 # CLI examples:
-# python tests/test_qwen_ocr.py output/ocr_debug_images
-# python tests/test_qwen_ocr.py output/ocr_debug_images --device cuda
-# python tests/test_qwen_ocr.py output/ocr_debug_images --limit 100 --print-every 10
-# python tests/test_qwen_ocr.py output/ocr_debug_images --pause-ms 50
-# python tests/test_qwen_ocr.py output/ocr_debug_images --model Qwen/Qwen3-VL-2B-Instruct
+# python tests/test_glm_ocr.py output/ocr_debug_original
+# python tests/test_glm_ocr.py output/ocr_debug_original --device cuda
+# python tests/test_glm_ocr.py output/ocr_debug_original --limit 100 --print-every 10
+# python tests/test_glm_ocr.py output/ocr_debug_original --pause-ms 50
+# python tests/test_glm_ocr.py output/ocr_debug_original --model zai-org/GLM-OCR
 
 import argparse
 import re
@@ -19,15 +19,15 @@ import torch
 from transformers import AutoModelForImageTextToText, AutoProcessor, BitsAndBytesConfig
 
 
-DEFAULT_MODEL_ID = "Qwen/Qwen3.5-0.8B"
-DEFAULT_PROMPT = "Reply with digits only. If unreadable, reply UNKNOWN."
+DEFAULT_MODEL_ID = "zai-org/GLM-OCR"
+DEFAULT_PROMPT = "Text Recognition:"
 IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".bmp", ".webp"}
 RESULTS_DIR = Path("output/ocr_benchmarks")
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Sequential benchmark for Qwen-VL helmet OCR on a directory of crops."
+        description="Sequential benchmark for GLM-OCR on a directory of crops."
     )
     parser.add_argument(
         "image_dir",
@@ -47,7 +47,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--max-new-tokens",
         type=int,
-        default=10,
+        default=8192,
         help="Generation limit per image.",
     )
     parser.add_argument(
@@ -97,23 +97,22 @@ def load_image_paths(image_dir: Path, limit: int | None) -> list[Path]:
         paths = paths[:limit]
     return paths
 
+
 def load_model(model_id: str, device: str):
     processor = AutoProcessor.from_pretrained(model_id)
 
     model_kwargs = {
         "device_map": "auto" if device == "cuda" else device,
+        "torch_dtype": "auto",
     }
     if device == "cuda":
-        quant_config = BitsAndBytesConfig(load_in_4bit=True)
+        quant_config = BitsAndBytesConfig()
         model_kwargs["quantization_config"] = quant_config
-    else:
-        model_kwargs["dtype"] = torch.float32
 
     model = AutoModelForImageTextToText.from_pretrained(
-        model_id,
+        pretrained_model_name_or_path=model_id,
         **model_kwargs,
     )
-
     model.eval()
     return processor, model
 
@@ -143,7 +142,7 @@ def read_image_rgb(path: Path):
 
 
 def run_single_image(
-    image_rgb,
+    image_path: Path,
     processor,
     model,
     prompt: str,
@@ -154,39 +153,42 @@ def run_single_image(
         {
             "role": "user",
             "content": [
-                {"type": "image", "image": image_rgb},
-                {"type": "text", "text": prompt},
+                {
+                    "type": "image",
+                    "url": str(image_path),
+                },
+                {
+                    "type": "text",
+                    "text": prompt,
+                },
             ],
-        },
+        }
     ]
 
     prep_start = time.perf_counter()
     inputs = processor.apply_chat_template(
         messages,
-        add_generation_prompt=True,
         tokenize=True,
+        add_generation_prompt=True,
         return_dict=True,
         return_tensors="pt",
     )
     inputs = inputs.to(get_model_input_device(model, device))
+    inputs.pop("token_type_ids", None)
     sync_device(device)
     prep_ms = (time.perf_counter() - prep_start) * 1000.0
 
     infer_start = time.perf_counter()
     with torch.no_grad():
-        outputs = model.generate(
-            **inputs,
-            max_new_tokens=max_new_tokens,
-            do_sample=False,
-        )
+        generated_ids = model.generate(**inputs, max_new_tokens=max_new_tokens)
     sync_device(device)
     infer_ms = (time.perf_counter() - infer_start) * 1000.0
 
     decode_start = time.perf_counter()
-    prompt_len = inputs["input_ids"].shape[-1]
+    prompt_len = inputs["input_ids"].shape[1]
     raw_text = processor.decode(
-        outputs[0][prompt_len:],
-        skip_special_tokens=True,
+        generated_ids[0][prompt_len:],
+        skip_special_tokens=False,
     ).strip()
     decode_ms = (time.perf_counter() - decode_start) * 1000.0
 
@@ -303,9 +305,8 @@ def main() -> None:
     wall_start = time.perf_counter()
 
     for idx, path in enumerate(image_paths, start=1):
-        image_rgb = read_image_rgb(path)
         result = run_single_image(
-            image_rgb=image_rgb,
+            image_path=path,
             processor=processor,
             model=model,
             prompt=args.prompt,
