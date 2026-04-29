@@ -1,4 +1,4 @@
-from collections import Counter, defaultdict
+from collections import defaultdict
 from dataclasses import dataclass
 from math import hypot
 
@@ -46,7 +46,7 @@ def bbox_iou(box_a, box_b):
 
 
 class Tracker:
-    def __init__(self, ocr_votes_count, conf_threshold, roi, frame_rate=30.0, finish_line=None, total_laps=None, accepted_numbers=None):
+    def __init__(self, ocr_conf_threshold, conf_threshold, roi, frame_rate=30.0, finish_line=None, total_laps=None, accepted_numbers=None):
         self.frame_rate = float(frame_rate) if float(frame_rate) > 0 else 30.0
 
         # Tuned ByteTrack settings for steadier helmet/person IDs.
@@ -77,13 +77,13 @@ class Tracker:
         self.people_tracks = sv.Detections.empty()
 
         self.processed_tracker_ids = set()
-        self.ocr_runs = defaultdict(lambda: {"runs": 0, "cooldown": 0, "votes": []})
         self.people_hnum_final = {}
 
         self.person_class_id = 1
         self.helmet_class_id = 0
 
         self.accepted_numbers = accepted_numbers
+        self.ocr_conf_threshold = ocr_conf_threshold
 
         self.person_frame_index = 0
         self.next_person_canonical_id = 1
@@ -94,11 +94,6 @@ class Tracker:
         self.reuse_strict_distance_px = 100.0
         self.reuse_min_iou = 0.05
 
-        # Runs we wait before we wait RUNS_COOLDOWN frames before we try again on a given TID
-        self.runs_before_retry = ocr_votes_count + 1
-        self.runs_cooldown = 5
-
-        self.ocr_votes_count = ocr_votes_count
         self.conf_threshold = conf_threshold
         self.roi = roi
 
@@ -309,11 +304,11 @@ class Tracker:
 
     def assign_helmet_numbers_to_people(self, helmets):
         """
-        Assign helmet numbers to people_tracks.data["helmet_number"]
-        This is based on:
-            - There is enough votes in self.ocr_runs[tid]["votes"]
-            - The most common number from the given list of voted numbers.
-            - That the number is one inside self.accepted_numbers (CSV), this happens through _match_partial()
+        Assign helmet numbers to people_tracks.data["helmet_number"] using one-shot OCR.
+        Accepts a result immediately if:
+            - The track is not yet confirmed
+            - The number matches an accepted number (via _match_partial)
+            - The OCR confidence meets the threshold
         """
         non_confirmed_people = self.get_non_confirmed_people_tracks()
 
@@ -323,73 +318,52 @@ class Tracker:
                 or len(non_confirmed_people) == 0):
             return
 
-        # Get a list of nonconfirmed TIDs
-        # It's called allowed_ids since these are the IDs we allow to be checked.
+        # Get a set of nonconfirmed TIDs
         allowed_ids = set(non_confirmed_people.tracker_id.tolist())
 
-        # Loop through each crop and assign them into people_tracks.data["helmet_numbers"]
+        # Loop through each OCR result and assign immediately if confidence is sufficient
         for h in helmets:
             tid = h["track_id"]
             number = h["helmet_number"]
+            ocr_conf = h.get("ocr_conf", 0.0)
 
-            # Skip ids that are already confirmed
+            # Skip ids that are already confirmed or not in active tracks
             if tid not in allowed_ids:
                 continue
 
-            # Skip tracks that isn't confirmed by ByteTrack yet.
+            # Skip tracks without a valid tracker ID
             if tid == -1:
                 continue
 
-            # If track is already confirmed, skip OCR processing entirely.
+            # If track is already confirmed, skip entirely
             if tid in self.people_hnum_final:
                 continue
 
-            state = self.ocr_runs[tid]
-
-            # Increments the cooldown if its active, and resets if it ran certain amount of times.
-            if state["runs"] >= self.runs_before_retry:
-                state["cooldown"] += 1
-                # Reset if cooldown reached
-                if state["cooldown"] >= self.runs_cooldown:
-                    state["runs"] = 0
-                    state["cooldown"] = 0
+            # Check confidence threshold
+            if ocr_conf < self.ocr_conf_threshold:
+                print(f"[OCR] track_id={tid}: conf={ocr_conf:.1f}% below threshold ({self.ocr_conf_threshold}%) — rejected")
                 continue
 
-            state["runs"] += 1
-            # Check if the number is part of the accepted helmet numbers
-            # (from CSV file)
-            number = self._match_partial(number)
+            # Match against accepted helmet numbers (from CSV)
+            matched = self._match_partial(number)
 
-            if number == "" or number is None:
-                print("Number didn't natch accepted numbers...")
+            if matched == "" or matched is None:
+                print(f"[OCR] track_id={tid}: number='{number}' didn't match accepted numbers — rejected")
                 continue
 
-            state["votes"].append(number)
+            # Check for duplicate assignment (uniksjeck)
+            if matched in self.people_hnum_final.values():
+                print(f"[OCR] track_id={tid}: #{matched} already assigned to another skater — rejected")
+                continue
 
-            print("tid:", tid, "votes:", state["votes"])
-            # Given enough votes and tid not being a confirmed helmet
-            if len(state["votes"]) >= self.ocr_votes_count and tid not in self.people_hnum_final:
-                # Get the number that is most common based on N votes.
-                final_number = Counter(state["votes"]).most_common(1)[0][0]
+            # Assign the number — one-shot confirmation!
+            mask = self.people_tracks.tracker_id == tid
+            idxs = np.where(mask)[0]
+            if len(idxs) > 0:
+                self.people_tracks.data["helmet_number"][idxs[0]] = matched
 
-                #UNIKSJEKK
-                if final_number in self.people_hnum_final.values():
-                    print(f"Tracker {tid}: #{final_number} allerede i bruk — avvist, prøver igjen.")
-                    state["votes"].clear()
-                    state["runs"] = 0
-                    continue
-
-                mask = self.people_tracks.tracker_id == tid
-                idxs = np.where(mask)[0] # Is this really necessary since we already have tid?
-                if len(idxs) > 0:
-                    # Assigns the final number for given people track, making it now confirmed.
-                    # Saved in people_tracks.data["helmet_number"]
-                    self.people_tracks.data["helmet_number"][idxs[0]] = final_number
-
-
-                # Assigns the final number into easily accessible list of accepted numbers.
-                self.people_hnum_final[tid] = final_number
-                print(f"Tracker {tid} final helmet number: {final_number}")
+            self.people_hnum_final[tid] = matched
+            print(f"[OCR CONFIRMED] track_id={tid} -> #{matched} (conf={ocr_conf:.1f}%)")
 
 
     def annotate(self, frame):

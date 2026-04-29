@@ -47,8 +47,8 @@ def _parse_ocr_response(raw_text: str) -> tuple[str, float]:
     """
     Extract digits and confidence from GLM-OCR response.
 
-    Confidence = response cleanliness ratio: pure digits -> 100%,
-    verbose output -> degraded, no digits -> 0%.
+    Expected format: NUMBER|CONFIDENCE (e.g. '42|0.95' or 'NONE|0.0')
+    Falls back to old cleanliness-based parsing if pipe-delimited format not found.
 
     Returns:
         Tuple of (digit_string, confidence_percentage)
@@ -57,8 +57,36 @@ def _parse_ocr_response(raw_text: str) -> tuple[str, float]:
         return "", 0.0
 
     text = raw_text.strip()
-    digits = re.sub(r"\D", "", text)
 
+    # Try pipe-delimited format: NUMBER|CONFIDENCE
+    parts = text.split("|")
+    if len(parts) >= 2:
+        number_part = parts[0].strip()
+        conf_part = parts[1].strip()
+
+        # Handle NONE/UNKNOWN responses
+        if number_part.lower() in ("none", "unknown"):
+            return "", 0.0
+
+        digits = re.sub(r"\D", "", number_part)
+        if not digits:
+            return "", 0.0
+
+        try:
+            conf = float(conf_part)
+            # Convert 0-1 scale to percentage
+            confidence = (conf * 100.0) if conf <= 1.0 else min(conf, 100.0)
+        except ValueError:
+            # If confidence can't be parsed, fall back to cleanliness ratio
+            digits = re.sub(r"\D", "", text)
+            if not digits:
+                return "", 0.0
+            confidence = (len(digits) / max(len(text), 1)) * 100.0
+
+        return digits, confidence
+
+    # Fallback: old cleanliness-based parsing for non-pipe responses
+    digits = re.sub(r"\D", "", text)
     if not digits:
         return "", 0.0
 

@@ -41,7 +41,6 @@ def main(config):
     rink_config = config["Rink"]
     conf_threshold = runtime_config["CONF_THRESHOLD"]
     frame_skip = runtime_config["FRAME_SKIP"]
-    ocr_vote = runtime_config["OCR_VOTE"]
     close_helmet_person_max_dist = runtime_config["CLOSE_HELMET_PERSON_MAX_DIST"]
     close_helmet_person_max_below_ratio = runtime_config["CLOSE_HELMET_PERSON_MAX_BELOW_RATIO"]
 

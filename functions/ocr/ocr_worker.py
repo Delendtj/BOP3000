@@ -1,5 +1,6 @@
 import multiprocessing as mp
 import os
+import time
 from queue import Empty, Full
 from typing import Any, Dict, List, Optional
 
@@ -127,6 +128,7 @@ def _ocr_process_main(
             }
 
             try:
+                t0 = time.perf_counter()
                 out = register_helmet(
                     [helmet],
                     base_url=base_url,
@@ -135,21 +137,30 @@ def _ocr_process_main(
                     timeout=timeout,
                     debug=False,
                 )
+                elapsed_ms = (time.perf_counter() - t0) * 1000
+
+                # Track inference timing stats
+                _inc(stats["ocr_inference_count"])
+                with stats["ocr_total_time_ms"].get_lock():
+                    stats["ocr_total_time_ms"].value += elapsed_ms
+                if elapsed_ms < stats["ocr_min_ms"].value or stats["ocr_inference_count"].value == 1:
+                    stats["ocr_min_ms"].value = elapsed_ms
+                if elapsed_ms > stats["ocr_max_ms"].value:
+                    stats["ocr_max_ms"].value = elapsed_ms
                 if not out:
                     _inc(stats["ocr_empty_return"])
 
-                if out[0]:
+                if out and len(out) > 0:
                     result = out[0]
+                    print(
+                        f"[ocr-worker] tid={result.get('track_id', tid)} "
+                        f"number='{result.get('helmet_number', '')}' "
+                        f"conf={result.get('ocr_conf', 0.0):.1f}% "
+                        f"({elapsed_ms:.0f}ms)"
+                    )
                 else:
+                    print(f"[ocr-worker] tid={tid}: empty result ({elapsed_ms:.0f}ms)")
                     continue
-                print(
-                    "[ocr-worker] emitted result:",
-                    {
-                        "track_id": result.get("track_id", tid),
-                        "helmet_number": result.get("helmet_number", ""),
-                        "ocr_conf": result.get("ocr_conf", 0.0),
-                    },
-                )
             except Exception:
                 _inc(stats["ocr_errors"])
                 print("[ocr-worker] register_helmet raised for track_id:", tid)
@@ -187,7 +198,8 @@ class OCRWorker:
         shm_dtype: str = "uint8",
         ocr_base_url: str = "http://127.0.0.1:1234/v1",
         ocr_model: str = "glm-ocr",
-        ocr_prompt: str = "Return ONLY the numbers visible on this helmet. Output digits only, no punctuation or explanation. If no number is visible, output unknown.",
+        ocr_prompt: str = "Identify the helmet number in this image. Return exactly in this format: NUMBER|CONFIDENCE where CONFIDENCE is a decimal between 0 and 1 (e.g. '42|0.95'). If no number is visible, return: NONE|0.0",
+
         ocr_timeout: float = 5.0,
     ):
         self._ctx = mp.get_context(start_method)
@@ -222,6 +234,11 @@ class OCRWorker:
             "ocr_empty_return": self._ctx.Value("i", 0),
             "shm_oversize_drop": self._ctx.Value("i", 0),
             "shm_write_ok": self._ctx.Value("i", 0),
+            # Inference timing stats
+            "ocr_inference_count": self._ctx.Value("i", 0),
+            "ocr_total_time_ms": self._ctx.Value("d", 0.0),
+            "ocr_min_ms": self._ctx.Value("d", float('inf')),
+            "ocr_max_ms": self._ctx.Value("d", 0.0),
         }
 
 
@@ -396,9 +413,17 @@ class OCRWorker:
             _inc(self._stats["out_dequeued"], len(items))
         return items
 
-    def get_stats(self) -> Dict[str, int]:
+    def get_stats(self) -> Dict[str, Any]:
         """
         Return stats for the ocr_benchmark
         It can be found in utilities/benchmark.py
         """
-        return {key: int(counter.value) for key, counter in self._stats.items()}
+        result = {}
+        for key, counter in self._stats.items():
+            val = counter.value
+            # Timing keys are float counters, rest are int
+            if 'ms' in key or 'time' in key:
+                result[key] = float(val)
+            else:
+                result[key] = int(val)
+        return result

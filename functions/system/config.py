@@ -57,7 +57,7 @@ def create_config(path):
     config["Runtime"] = {
         "CONF_THRESHOLD": str(CONF_THRESHOLD),
         "FRAME_SKIP": "1",
-        "OCR_VOTE": "3",  # collect votes for N frames before deciding
+        "OCR_CONF_THRESHOLD": "60",  # minimum confidence (%) to accept a one-shot OCR result
         "CLOSE_HELMET_PERSON_MAX_DIST": "80",
         "CLOSE_HELMET_PERSON_MAX_BELOW_RATIO": "0.08",
     }
@@ -77,7 +77,8 @@ def create_config(path):
     config["OCR"] = {
         "BASE_URL": "http://127.0.0.1:1234",
         "MODEL": "glm-ocr",
-        "PROMPT": "Return ONLY the numbers visible on this helmet. Output digits only, no punctuation or explanation. If no number is visible, output unknown.",
+        "PROMPT": "Identify the helmet number in this image. Return exactly in this format: NUMBER|CONFIDENCE where CONFIDENCE is a decimal between 0 and 1 (e.g. '42|0.95'). If no number is visible, return: NONE|0.0",
+
         "TIMEOUT": "5",
     }
 
@@ -138,7 +139,7 @@ def load_config(path):
         "Runtime": {
             "CONF_THRESHOLD": config.getfloat("Runtime", "CONF_THRESHOLD"),
             "FRAME_SKIP": config.getint("Runtime", "FRAME_SKIP"),
-            "OCR_VOTE": config.getint("Runtime", "OCR_VOTE"),
+            "OCR_CONF_THRESHOLD": config.getfloat("Runtime", "OCR_CONF_THRESHOLD"),
             "CLOSE_HELMET_PERSON_MAX_DIST": config.getfloat("Runtime", "CLOSE_HELMET_PERSON_MAX_DIST"),
             "CLOSE_HELMET_PERSON_MAX_BELOW_RATIO": config.getfloat("Runtime", "CLOSE_HELMET_PERSON_MAX_BELOW_RATIO"),
         },

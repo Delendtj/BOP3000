@@ -106,7 +106,7 @@ def initialize(config, *, dashboard_window_name: str) -> AppContext | None:
     )
 
     tracker = Tracker(
-        config["Runtime"]["OCR_VOTE"],
+        config["Runtime"]["OCR_CONF_THRESHOLD"],
         config["Runtime"]["CONF_THRESHOLD"],
         ocr_roi,
         frame_rate=fps,
