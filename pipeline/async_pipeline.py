@@ -71,6 +71,10 @@ def _capture_loop(cap: cv2.VideoCapture,
 
 
     while not stop_event.is_set():
+        # Timestamp at capture time — before any processing delay.
+        # This keeps ts aligned with actual video playback position.
+        capture_ts = time.perf_counter()
+
         ret, frame = cap.read()
         if not ret:
             # video ferdig / kamera feilet
@@ -85,11 +89,15 @@ def _capture_loop(cap: cv2.VideoCapture,
         if frame_skip > 1 and (i % frame_skip != 0):
             continue
 
-        out_q.put_latest(FrameItem(time.perf_counter(), frame))
+        out_q.put_latest(FrameItem(capture_ts, frame))
 
-        # Throttle fps
+        # Adaptive throttle: only sleep for the remaining time after processing.
+        # This prevents cumulative drift from processing overhead.
         if frame_interval is not None:
-            time.sleep(frame_interval)
+            elapsed = time.perf_counter() - capture_ts
+            sleep_time = frame_interval - elapsed
+            if sleep_time > 0:
+                time.sleep(sleep_time)
 
 
 # 4) Tråd 2: Preprocessing (valgfritt steg egt kan sees på)

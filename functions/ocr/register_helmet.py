@@ -137,9 +137,9 @@ def register_helmet(
             number_str, ocr_conf = _parse_ocr_response(raw_text)
 
             crop_h, crop_w = img.shape[:2]
-            print(
-                f"[OCR RESULT] track_id={tid}, crop={crop_w}x{crop_h}, "
-                f"extracted='{number_str}', conf={ocr_conf:.1f}%, raw='{raw_text}'"
+            logger.debug(
+                "OCR RESULT: track_id=%d, crop=%dx%d, extracted='%s', conf=%.1f%%, raw='%s'",
+                tid, crop_w, crop_h, number_str, ocr_conf, raw_text,
             )
 
             # Save detailed debug images

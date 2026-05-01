@@ -1,5 +1,6 @@
 # Core
 from multiprocessing.spawn import freeze_support
+import logging
 import os
 import time
 
@@ -66,7 +67,8 @@ def main(config):
     close_sync_misses = 0       # Amount of times close_buffer doesn't have frame/item for the OCR association in time.
     last_close_sync_log = 0.0   # Timestamp for above logging
 
-    print("Controls: Esc=quit, Space=pause/resume, r/o=wide ROIs, c/v=close ROIs")
+    logger = logging.getLogger(__name__)
+    logger.info("Controls: Esc=quit, Space=pause/resume, r/o=wide ROIs, c/v=close ROIs")
 
     # Main Loop
     try:
@@ -137,7 +139,8 @@ def main(config):
 
             close_people = None
             helmet_crops = []
-            print("ocr_roi is not None: ", context.ocr_roi is not None)
+            if context.ocr_roi is None:
+                logger.debug("OCR ROI not configured — skipping helmet OCR")
             if context.ocr_roi is not None:
                 helmet_tracks = context.tracker.get_non_confirmed_people_tracks()
                 helmet_in_roi = keep_detections_inside_roi(helmet_tracks, context.ocr_roi)
@@ -150,9 +153,9 @@ def main(config):
                             close_sync_misses += 1
                             now = time.perf_counter()
                             if now - last_close_sync_log >= sync_miss_log_interval:
-                                print(
-                                    f"Skipping multi-cam OCR: no close frame within {max_sync_delta:.3f}s "
-                                    f"(misses={close_sync_misses})"
+                                logger.warning(
+                                    "Skipping multi-cam OCR: no close frame within %.3fs (misses=%d)",
+                                    max_sync_delta, close_sync_misses,
                                 )
                                 last_close_sync_log = now
 
@@ -171,10 +174,9 @@ def main(config):
                     close_helmets = close_out.helmets
                     close_people = close_out.people
 
-                    print(
-                        "[ocr-debug] close_inference: helmets=",
+                    logger.debug(
+                        "close_inference: helmets=%d, people=%d",
                         len(close_helmets) if close_helmets is not None else 0,
-                        "people=",
                         len(close_people) if close_people is not None else 0,
                     )
 
@@ -216,10 +218,7 @@ def main(config):
                         max_dist=rink_match_max_dist,
                     )
 
-                    print(
-                        "[ocr-debug] close_to_wide_tid=",
-                        len(close_to_wide_tid) if close_to_wide_tid is not None else 0,
-                    )
+                    logger.debug("close_to_wide_tid=%d", len(close_to_wide_tid) if close_to_wide_tid is not None else 0)
                     # Then we extract only the helmets that has been connected to people tracks across screens
                     helmet_crops = build_helmet_crops_for_wide_ids(
                         close_helmets,
@@ -228,16 +227,13 @@ def main(config):
                         close_to_wide_tid,
                     )
 
-                    print(
-                        "[ocr-debug] helmet_crops=",
-                        len(helmet_crops) if helmet_crops is not None else 0,
-                    )
+                    logger.debug("helmet_crops=%d", len(helmet_crops) if helmet_crops is not None else 0)
 
                 # Give associated helmet crops to the ocr_worker
                 # The ocr_worker will then perform ocr on the crops.
                 for h in helmet_crops:
                     if context.tracker.is_person_confirmed(h["track_id"]):
-                        print(f"[ocr-debug] skipping confirmed track_id={h['track_id']}")
+                        logger.debug("Skipping confirmed track_id=%s", h['track_id'])
                         continue
                     context.ocr_worker.submit(h)
 
@@ -277,7 +273,6 @@ def main(config):
 
             # Calculate FPS
             now = time.perf_counter()
-            prev_frame_time = now
             if prev_frame_time is not None:
                 elapsed = now - prev_frame_time
                 if elapsed > 0:
@@ -285,21 +280,13 @@ def main(config):
                     fps_inst = 1.0 / elapsed
                     # Exponential Moving Average FPS
                     fps_ema = fps_inst if fps_ema <= 0 else (0.9 * fps_ema + 0.1 * fps_inst)
+            prev_frame_time = now
 
             if context.ocr_bench.should_log(now):
                 stats = context.ocr_worker.get_stats()
-                print(context.ocr_bench.format_line(stats))
+                logger.info("%s", context.ocr_bench.format_line(stats))
 
             fps_text = f"FPS: {fps_ema:.1f}" if fps_ema > 0 else "FPS: --"
-            cv2.putText(
-                annotated_frame,
-                fps_text,
-                (10, 30),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.8,
-                (0, 255, 255),
-                2,
-            )
 
             # Update the lap_panel
             context.lap_panel_state = update_lap_panel_state(
@@ -316,6 +303,18 @@ def main(config):
             # Draws the ROI lines onto the close camera frame.
             draw_roi_lines(close_vis, context.close_yolo_roi, context.close_ocr_roi)
 
+            # Small FPS counter on the close camera feed (top-left corner)
+            if close_vis is not None and fps_ema > 0:
+                cv2.putText(
+                    close_vis,
+                    fps_text,
+                    (10, 24),
+                    cv2.FONT_HERSHEY_SIMPLEX,
+                    0.5,
+                    (0, 255, 255),
+                    1,
+                )
+
             close_subtitle = None
             if latest_close_frame is None:
                 close_subtitle = "No close frame"
@@ -328,7 +327,7 @@ def main(config):
                 annotated_frame,
                 close_vis,
                 context.display_panel_size,
-                wide_subtitle=fps_text,
+                wide_subtitle=None,
                 close_subtitle=close_subtitle,
             )
             dashboard_frame = compose_dashboard_canvas(

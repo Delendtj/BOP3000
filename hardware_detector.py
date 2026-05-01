@@ -1,3 +1,5 @@
+import logging
+import os
 import subprocess
 from ultralytics import YOLO
 from functions.detection.tensor_loader import init_tensorrt
@@ -10,13 +12,14 @@ class HardwareDetector:
 
     def detect_hardware(self):
         """Detect available hardware and choose the best backend."""
+        logger = logging.getLogger(__name__)
         if self._has_nvidia_gpu():
             self.hardware_type = 'cuda'
-            print("NVIDIA GPU detected, using CUDA/TensorRT")
+            logger.info("NVIDIA GPU detected, using CUDA/TensorRT")
             return 'cuda'
 
         self.hardware_type = 'openvino'
-        print("No NVIDIA GPU found, using OpenVINO")
+        logger.info("No NVIDIA GPU found, using OpenVINO")
         return 'openvino'
 
     def _has_nvidia_gpu(self):
@@ -30,7 +33,7 @@ class HardwareDetector:
                 text=True
             )
             if result.returncode == 0 and result.stdout.strip():
-                print(f"  Found NVIDIA GPU: {result.stdout.strip()}")
+                logging.getLogger(__name__).debug("Found NVIDIA GPU: %s", result.stdout.strip())
                 return True
         except (FileNotFoundError, subprocess.TimeoutExpired):
             pass
@@ -41,7 +44,7 @@ class HardwareDetector:
         if self.hardware_type is None:
             self.detect_hardware()
 
-        print(f"\nInitializing {self.hardware_type.upper()} model...")
+        logging.getLogger(__name__).info("Initializing %s model...", self.hardware_type.upper())
 
         if self.hardware_type == 'cuda':
             return init_tensorrt(self.config)
@@ -50,24 +53,23 @@ class HardwareDetector:
 
     def _init_openvino_model(self):
         """Load a YOLO model for OpenVINO (Intel GPU/CPU) or fall back to PyTorch."""
+        logger = logging.getLogger(__name__)
         ov_path = self.config.get('Model_OV_path', 'models/best_openvino_model')
         pt_path = self.config.get('Model_PT_path', 'models/best.pt')
 
-
-        if __import__('os').path.exists(ov_path):
+        if os.path.exists(ov_path):
             try:
-                print(f"  Loading OpenVINO model: {ov_path}")
+                logger.info("Loading OpenVINO model: %s", ov_path)
                 model = YOLO(ov_path, task='detect')
-                print("  ✓ OpenVINO model loaded successfully")
+                logger.info("OpenVINO model loaded successfully")
                 return model
             except Exception as e:
-                print(f"  ✗ OpenVINO loading failed: {e}")
+                logger.error("OpenVINO loading failed: %s", e)
 
-
-        if __import__('os').path.exists(pt_path):
-            print(f"  Loading PyTorch model (CPU fallback): {pt_path}")
+        if os.path.exists(pt_path):
+            logger.info("Loading PyTorch model (CPU fallback): %s", pt_path)
             model = YOLO(pt_path, task='detect')
-            print("  ✓ PyTorch model loaded")
+            logger.info("PyTorch model loaded")
             return model
 
         raise FileNotFoundError(
