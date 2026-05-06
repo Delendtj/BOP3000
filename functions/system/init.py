@@ -49,6 +49,7 @@ class AppContext:
     fps: float
     close_preview_frame: Any
     ocr_bench: OCRThroughputStats
+    profiler: Any = None
 
 
 def initialize(config, *, dashboard_window_name: str) -> AppContext | None:
@@ -68,6 +69,16 @@ def initialize(config, *, dashboard_window_name: str) -> AppContext | None:
     detector = HardwareDetector(config["Model"])
     model = detector.initialize_model()
     print(f"Loaded {len(helmet_numbers)} helmet numbers from startup GUI.")
+
+    # Start OCR worker early so model loading happens in parallel with TensorRT
+    ocr_config = config.get("OCR", {})
+    ocr_worker = OCRWorker(
+        ocr_base_url=ocr_config.get("BASE_URL"),
+        ocr_model=ocr_config.get("MODEL"),
+        ocr_prompt=ocr_config.get("PROMPT"),
+        ocr_timeout=ocr_config.get("TIMEOUT"),
+    )
+    ocr_worker.start()
 
     screen_width, screen_height = get_screen_size()
     window_layout = compute_window_layout(screen_width, screen_height)
@@ -127,15 +138,6 @@ def initialize(config, *, dashboard_window_name: str) -> AppContext | None:
         queue_size=3,
         inference_roi=close_yolo_roi,
     )
-
-    ocr_config = config.get("OCR", {})
-    ocr_worker = OCRWorker(
-        ocr_base_url=ocr_config.get("BASE_URL"),
-        ocr_model=ocr_config.get("MODEL"),
-        ocr_prompt=ocr_config.get("PROMPT"),
-        ocr_timeout=ocr_config.get("TIMEOUT"),
-    )
-    ocr_worker.start()
     pipeline.start()
     pipeline_close.start()
 
@@ -181,6 +183,7 @@ def initialize(config, *, dashboard_window_name: str) -> AppContext | None:
         fps=fps,
         close_preview_frame=close_preview_frame,
         ocr_bench=OCRThroughputStats(log_every_sec=2.0),
+        profiler=None,  # Set in main() after initialize()
     )
 
 

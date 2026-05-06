@@ -212,6 +212,21 @@ class AsyncFramePipeline:
         except queue.Empty:
             return None
 
+    def drain_available(self) -> list[FrameItem]:
+        """
+        Non-blocking drain of all frames currently queued.
+        Returns all available items without waiting for new ones.
+        Used by the close-camera path to avoid blocking on the fast
+        60 FPS feed, which would stall the main loop.
+        """
+        items: list[FrameItem] = []
+        while True:
+            try:
+                items.append(self.proc_q.get_nowait())
+            except queue.Empty:
+                break
+        return items
+
     def stop(self):
         """Stopper pipeline og frigjør VideoCapture."""
         self.stop_event.set()

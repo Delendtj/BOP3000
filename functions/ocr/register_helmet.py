@@ -1,18 +1,20 @@
 """
 Helmet OCR processing module.
 
-Processes cropped helmet images via GLM-OCR (LM Studio) to extract helmet numbers.
+Processes cropped helmet images via a Hugging Face `transformers` vision-language
+model to extract helmet numbers.
 Designed to work with the multiprocessing architecture in ocr_worker.py.
 """
 
 import logging
-import base64
+import os
 import re
 from pathlib import Path
 from typing import Any, List, Optional
 
 import cv2
 import numpy as np
+from PIL import Image
 
 # Threshold for upscaling small images
 UPSCALE_THRESH = 60
@@ -23,24 +25,89 @@ DEBUG_OCR_LOGS_DIR = Path("output/ocr_debug_images")
 # Configure logging
 logger = logging.getLogger(__name__)
 
-# Lazy-init client for spawned worker process
+# Lazy-init model bundle for spawned worker process
 _ocr_client: Optional[Any] = None
 _ocr_model: Optional[str] = None
 _preprocess_log_index = 0
 _debug_image_counter = 0
 
 
+def _resolve_model_source(model: str) -> tuple[str, bool]:
+    """
+    Resolve a model ID or local path into the source that `transformers` should load.
+
+    Returns:
+        Tuple of (model_or_path, local_files_only)
+    """
+    model_path = Path(model).expanduser()
+    if model_path.exists():
+        return str(model_path), True
+
+    hub_cache = Path(os.environ.get("HUGGINGFACE_HUB_CACHE", "")).expanduser() if os.environ.get("HUGGINGFACE_HUB_CACHE") else None
+    if hub_cache is None:
+        hf_home = Path(os.environ.get("HF_HOME", Path.home() / ".cache" / "huggingface")).expanduser()
+        hub_cache = hf_home / "hub"
+
+    cache_dir = hub_cache / f"models--{model.replace('/', '--')}"
+    refs_main = cache_dir / "refs" / "main"
+    snapshots_dir = cache_dir / "snapshots"
+
+    snapshot_id = None
+    if refs_main.exists():
+        snapshot_id = refs_main.read_text(encoding="utf-8").strip()
+    elif snapshots_dir.exists():
+        snapshots = sorted((p for p in snapshots_dir.iterdir() if p.is_dir()), key=lambda p: p.stat().st_mtime, reverse=True)
+        if snapshots:
+            snapshot_id = snapshots[0].name
+
+    if snapshot_id:
+        snapshot_path = snapshots_dir / snapshot_id
+        if snapshot_path.exists():
+            logger.info("Using cached local OCR model snapshot: %s", snapshot_path)
+            return str(snapshot_path), True
+
+    return model, False
+
+
 def init_ocr_client(base_url: str, model: str) -> None:
-    """Initialize OpenAI-compatible client for spawned worker process."""
+    """Initialize a local `transformers` OCR model for the spawned worker process."""
     global _ocr_client, _ocr_model
 
-    from openai import OpenAI
+    import torch
+    from transformers import AutoModelForImageTextToText, AutoProcessor
 
-    _ocr_client = OpenAI(
-        base_url=base_url,
-        api_key="lm-studio",
+    del base_url  # Kept for call-site compatibility with the existing worker API.
+
+    if not model:
+        raise ValueError("OCR model must be a Hugging Face model ID or local path.")
+
+    model_source, local_files_only = _resolve_model_source(model)
+
+    processor = AutoProcessor.from_pretrained(
+        model_source,
+        trust_remote_code=True,
+        local_files_only=local_files_only,
     )
-    _ocr_model = model
+
+    model_kwargs = {
+        "trust_remote_code": True,
+        "local_files_only": local_files_only,
+    }
+    if torch.cuda.is_available():
+        model_kwargs["torch_dtype"] = torch.float16
+
+    ocr_model = AutoModelForImageTextToText.from_pretrained(model_source, **model_kwargs)
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    ocr_model = ocr_model.to(device)
+    ocr_model.eval()
+
+    _ocr_client = {
+        "processor": processor,
+        "model": ocr_model,
+        "device": device,
+    }
+    _ocr_model = model_source
 
 
 def _parse_ocr_response(raw_text: str) -> tuple[str, float]:
@@ -181,42 +248,60 @@ def register_helmet(
 
 def _call_ocr(client, image_bgr: np.ndarray, prompt: str, model: str, timeout: float) -> str:
     """
-    Call GLM-OCR API with a preprocessed helmet crop.
-
-    Converts BGR -> RGB -> JPEG base64 -> HTTP request.
-    Returns raw text response from model.
+    Run OCR locally with `transformers` on a preprocessed helmet crop.
     """
-    # BGR -> RGB
+    import torch
+
+    del model, timeout  # Timeout is not enforced by local generation.
+
     image_rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
-
-    # Encode as JPEG base64
-    ok, buffer = cv2.imencode(".jpg", image_rgb)
-    if not ok:
-        return "unknown"
-
-    image_b64 = base64.b64encode(buffer).decode("utf-8")
+    image_pil = Image.fromarray(image_rgb)
+    processor = client["processor"]
+    ocr_model = client["model"]
+    device = client["device"]
 
     try:
-        response = client.chat.completions.create(
-            model=model,
-            messages=[
-                {
-                    "role": "user",
-                    "content": [
-                        {"type": "text", "text": prompt},
-                        {
-                            "type": "image_url",
-                            "image_url": {"url": f"data:image/jpeg;base64,{image_b64}"},
-                        },
-                    ],
-                }
-            ],
-            timeout=timeout,
-        )
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "image", "image": image_pil},
+                    {"type": "text", "text": prompt},
+                ],
+            }
+        ]
 
-        return (response.choices[0].message.content or "").strip()
+        if hasattr(processor, "apply_chat_template"):
+            inputs = processor.apply_chat_template(
+                messages,
+                add_generation_prompt=True,
+                tokenize=True,
+                return_dict=True,
+                return_tensors="pt",
+            )
+        else:
+            inputs = processor(images=image_pil, text=prompt, return_tensors="pt")
 
-    except Exception:
+        inputs = {
+            key: value.to(device) if hasattr(value, "to") else value
+            for key, value in inputs.items()
+        }
+
+        with torch.inference_mode():
+            outputs = ocr_model.generate(
+                **inputs,
+                max_new_tokens=16,
+                do_sample=False,
+            )
+
+        prompt_len = inputs["input_ids"].shape[-1] if "input_ids" in inputs else 0
+        tokens = outputs[0][prompt_len:] if prompt_len else outputs[0]
+
+        if hasattr(processor, "decode"):
+            return processor.decode(tokens, skip_special_tokens=True).strip()
+        return processor.batch_decode([tokens], skip_special_tokens=True)[0].strip()
+    except Exception as exc:
+        logger.warning("Transformers OCR call failed: %s(%s)", type(exc).__name__, exc)
         return "unknown"
 
 

@@ -75,8 +75,10 @@ def create_config(path):
     }
 
     config["OCR"] = {
-        "BASE_URL": "http://127.0.0.1:1234",
-        "MODEL": "glm-ocr",
+        "BACKEND": "transformers",
+        "BASE_URL": "",
+        "MODEL": "zai-org/GLM-OCR",
+        "MODEL_ID": "zai-org/GLM-OCR",
         "PROMPT": "Identify the helmet number in this image. Return exactly in this format: NUMBER|CONFIDENCE where CONFIDENCE is a decimal between 0 and 1 (e.g. '42|0.95'). If no number is visible, return: NONE|0.0",
 
         "TIMEOUT": "5",
@@ -153,8 +155,9 @@ def load_config(path):
             "lap_window_name": config["Rink"]["lap_window_name"],
         },
         "OCR": {
+            "BACKEND": config.get("OCR", "BACKEND", fallback="transformers"),
             "BASE_URL": config.get("OCR", "BASE_URL", fallback="http://127.0.0.1:1234/v1"),
-            "MODEL": config.get("OCR", "MODEL", fallback="glm-ocr"),
+            "MODEL": config.get("OCR", "MODEL_ID", fallback=config.get("OCR", "MODEL", fallback="zai-org/GLM-OCR")),
             "PROMPT": config.get("OCR", "PROMPT", fallback="Return ONLY the numbers visible on this helmet. Output digits only, no punctuation or explanation. If no number is visible, output unknown."),
             "TIMEOUT": config.getfloat("OCR", "TIMEOUT", fallback=5.0),
         },
