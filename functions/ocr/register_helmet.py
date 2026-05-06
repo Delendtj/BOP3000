@@ -7,6 +7,7 @@ Designed to work with the multiprocessing architecture in ocr_worker.py.
 """
 
 import logging
+import json
 import os
 import re
 from pathlib import Path
@@ -21,6 +22,15 @@ UPSCALE_THRESH = 60
 PREPROCESS_LOG_DIR = Path("output/ocr_debug_images")
 PREPROCESS_LOG_MAX_IMAGES = 20
 DEBUG_OCR_LOGS_DIR = Path("output/ocr_debug_images")
+DEFAULT_OCR_MODEL_ID = "zai-org/GLM-OCR"
+DEFAULT_OCR_MODEL_DIR = Path("models/ocr_model")
+MODEL_WEIGHT_PATTERNS = (
+    "*.safetensors",
+    "*.bin",
+    "*.pt",
+    "*.pth",
+    "*.onnx",
+)
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -32,6 +42,58 @@ _preprocess_log_index = 0
 _debug_image_counter = 0
 
 
+def _has_model_weights(model_path: Path) -> bool:
+    return any(model_path.glob(pattern) for pattern in MODEL_WEIGHT_PATTERNS)
+
+
+def _looks_like_default_ocr_path(model: str, model_path: Path) -> bool:
+    normalized = model.replace("\\", "/").strip("/")
+    return normalized in {
+        "models/ocr_model",
+        "models/ocr_models",
+        str(DEFAULT_OCR_MODEL_DIR).replace("\\", "/"),
+    } or model_path.resolve() == DEFAULT_OCR_MODEL_DIR.resolve()
+
+
+def _repo_id_from_local_metadata(model_path: Path) -> str:
+    generation_config_path = model_path / "generation_config.json"
+    if generation_config_path.exists():
+        try:
+            generation_config = json.loads(generation_config_path.read_text(encoding="utf-8"))
+            repo_id = generation_config.get("_name_or_path")
+            if repo_id:
+                return repo_id
+        except (OSError, json.JSONDecodeError):
+            logger.debug("Could not read OCR generation config at %s", generation_config_path)
+
+    return DEFAULT_OCR_MODEL_ID
+
+
+def _download_ocr_model(repo_id: str, target_dir: Path) -> str:
+    """
+    Download the OCR model into the repository-local models directory.
+
+    The model weights are intentionally not committed to git, so fresh clones can
+    hydrate models/ocr_model on first OCR startup.
+    """
+    try:
+        from huggingface_hub import snapshot_download
+    except ImportError as exc:
+        raise RuntimeError(
+            "huggingface_hub is required to download the OCR model. "
+            "Install project requirements, then run again."
+        ) from exc
+
+    target_dir.mkdir(parents=True, exist_ok=True)
+    logger.info("Downloading OCR model %s to %s", repo_id, target_dir)
+    snapshot_download(
+        repo_id=repo_id,
+        local_dir=str(target_dir),
+        local_dir_use_symlinks=False,
+    )
+    return str(target_dir)
+
+
 def _resolve_model_source(model: str) -> tuple[str, bool]:
     """
     Resolve a model ID or local path into the source that `transformers` should load.
@@ -41,7 +103,25 @@ def _resolve_model_source(model: str) -> tuple[str, bool]:
     """
     model_path = Path(model).expanduser()
     if model_path.exists():
-        return str(model_path), True
+        if _has_model_weights(model_path):
+            return str(model_path), True
+
+        repo_id = _repo_id_from_local_metadata(model_path)
+        model_source = _download_ocr_model(repo_id, model_path)
+        return model_source, True
+
+    if _looks_like_default_ocr_path(model, model_path):
+        model_source = _download_ocr_model(DEFAULT_OCR_MODEL_ID, DEFAULT_OCR_MODEL_DIR)
+        return model_source, True
+
+    if model == DEFAULT_OCR_MODEL_ID:
+        model_source = _download_ocr_model(DEFAULT_OCR_MODEL_ID, DEFAULT_OCR_MODEL_DIR)
+        return model_source, True
+
+    if "/" in model and not Path(model).suffix:
+        local_model_dir = DEFAULT_OCR_MODEL_DIR
+        model_source = _download_ocr_model(model, local_model_dir)
+        return model_source, True
 
     hub_cache = Path(os.environ.get("HUGGINGFACE_HUB_CACHE", "")).expanduser() if os.environ.get("HUGGINGFACE_HUB_CACHE") else None
     if hub_cache is None:
