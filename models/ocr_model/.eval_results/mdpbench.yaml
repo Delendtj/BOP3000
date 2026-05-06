@@ -1,0 +1,198 @@
+- dataset:
+    id: Delores-Lin/MDPBench
+    task_id: overall
+  value: 67.3
+  date: "2026-04-14"
+  source:
+    url: https://huggingface.co/datasets/Delores-Lin/MDPBench
+    name: MDPBench leaderboard
+    user: Delores-Lin
+- dataset:
+    id: Delores-Lin/MDPBench
+    task_id: digital
+  value: 77.9
+  date: "2026-04-14"
+  source:
+    url: https://huggingface.co/datasets/Delores-Lin/MDPBench
+    name: MDPBench leaderboard
+    user: Delores-Lin
+- dataset:
+    id: Delores-Lin/MDPBench
+    task_id: photographed
+  value: 63.7
+  date: "2026-04-14"
+  source:
+    url: https://huggingface.co/datasets/Delores-Lin/MDPBench
+    name: MDPBench leaderboard
+    user: Delores-Lin
+- dataset:
+    id: Delores-Lin/MDPBench
+    task_id: latin
+  value: 78.7
+  date: "2026-04-14"
+  source:
+    url: https://huggingface.co/datasets/Delores-Lin/MDPBench
+    name: MDPBench leaderboard
+    user: Delores-Lin
+- dataset:
+    id: Delores-Lin/MDPBench
+    task_id: de
+  value: 82.7
+  date: "2026-04-14"
+  source:
+    url: https://huggingface.co/datasets/Delores-Lin/MDPBench
+    name: MDPBench leaderboard
+    user: Delores-Lin
+- dataset:
+    id: Delores-Lin/MDPBench
+    task_id: en
+  value: 84.5
+  date: "2026-04-14"
+  source:
+    url: https://huggingface.co/datasets/Delores-Lin/MDPBench
+    name: MDPBench leaderboard
+    user: Delores-Lin
+- dataset:
+    id: Delores-Lin/MDPBench
+    task_id: es
+  value: 75.8
+  date: "2026-04-14"
+  source:
+    url: https://huggingface.co/datasets/Delores-Lin/MDPBench
+    name: MDPBench leaderboard
+    user: Delores-Lin
+- dataset:
+    id: Delores-Lin/MDPBench
+    task_id: fr
+  value: 76.2
+  date: "2026-04-14"
+  source:
+    url: https://huggingface.co/datasets/Delores-Lin/MDPBench
+    name: MDPBench leaderboard
+    user: Delores-Lin
+- dataset:
+    id: Delores-Lin/MDPBench
+    task_id: id
+  value: 79.7
+  date: "2026-04-14"
+  source:
+    url: https://huggingface.co/datasets/Delores-Lin/MDPBench
+    name: MDPBench leaderboard
+    user: Delores-Lin
+- dataset:
+    id: Delores-Lin/MDPBench
+    task_id: it
+  value: 82.8
+  date: "2026-04-14"
+  source:
+    url: https://huggingface.co/datasets/Delores-Lin/MDPBench
+    name: MDPBench leaderboard
+    user: Delores-Lin
+- dataset:
+    id: Delores-Lin/MDPBench
+    task_id: nl
+  value: 80.2
+  date: "2026-04-14"
+  source:
+    url: https://huggingface.co/datasets/Delores-Lin/MDPBench
+    name: MDPBench leaderboard
+    user: Delores-Lin
+- dataset:
+    id: Delores-Lin/MDPBench
+    task_id: pt
+  value: 77.4
+  date: "2026-04-14"
+  source:
+    url: https://huggingface.co/datasets/Delores-Lin/MDPBench
+    name: MDPBench leaderboard
+    user: Delores-Lin
+- dataset:
+    id: Delores-Lin/MDPBench
+    task_id: vi
+  value: 69.2
+  date: "2026-04-14"
+  source:
+    url: https://huggingface.co/datasets/Delores-Lin/MDPBench
+    name: MDPBench leaderboard
+    user: Delores-Lin
+- dataset:
+    id: Delores-Lin/MDPBench
+    task_id: non_latin
+  value: 54.3
+  date: "2026-04-14"
+  source:
+    url: https://huggingface.co/datasets/Delores-Lin/MDPBench
+    name: MDPBench leaderboard
+    user: Delores-Lin
+- dataset:
+    id: Delores-Lin/MDPBench
+    task_id: ar
+  value: 21.7
+  date: "2026-04-14"
+  source:
+    url: https://huggingface.co/datasets/Delores-Lin/MDPBench
+    name: MDPBench leaderboard
+    user: Delores-Lin
+- dataset:
+    id: Delores-Lin/MDPBench
+    task_id: hi
+  value: 39.6
+  date: "2026-04-14"
+  source:
+    url: https://huggingface.co/datasets/Delores-Lin/MDPBench
+    name: MDPBench leaderboard
+    user: Delores-Lin
+- dataset:
+    id: Delores-Lin/MDPBench
+    task_id: jp
+  value: 65.5
+  date: "2026-04-14"
+  source:
+    url: https://huggingface.co/datasets/Delores-Lin/MDPBench
+    name: MDPBench leaderboard
+    user: Delores-Lin
+- dataset:
+    id: Delores-Lin/MDPBench
+    task_id: ko
+  value: 61.2
+  date: "2026-04-14"
+  source:
+    url: https://huggingface.co/datasets/Delores-Lin/MDPBench
+    name: MDPBench leaderboard
+    user: Delores-Lin
+- dataset:
+    id: Delores-Lin/MDPBench
+    task_id: ru
+  value: 64.2
+  date: "2026-04-14"
+  source:
+    url: https://huggingface.co/datasets/Delores-Lin/MDPBench
+    name: MDPBench leaderboard
+    user: Delores-Lin
+- dataset:
+    id: Delores-Lin/MDPBench
+    task_id: th
+  value: 27.4
+  date: "2026-04-14"
+  source:
+    url: https://huggingface.co/datasets/Delores-Lin/MDPBench
+    name: MDPBench leaderboard
+    user: Delores-Lin
+- dataset:
+    id: Delores-Lin/MDPBench
+    task_id: zh
+  value: 78.5
+  date: "2026-04-14"
+  source:
+    url: https://huggingface.co/datasets/Delores-Lin/MDPBench
+    name: MDPBench leaderboard
+    user: Delores-Lin
+- dataset:
+    id: Delores-Lin/MDPBench
+    task_id: zh_t
+  value: 76.7
+  date: "2026-04-14"
+  source:
+    url: https://huggingface.co/datasets/Delores-Lin/MDPBench
+    name: MDPBench leaderboard
+    user: Delores-Lin

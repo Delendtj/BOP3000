@@ -378,16 +378,13 @@ def _call_ocr(client, image_bgr: np.ndarray, prompt: str, model: str, timeout: f
     device = client["device"]
 
     try:
+        combined_prompt = f"{_OCR_SYSTEM_PROMPT}\n\n{prompt}".strip()
         messages = [
-            {
-                "role": "system",
-                "content": _OCR_SYSTEM_PROMPT,
-            },
             {
                 "role": "user",
                 "content": [
                     {"type": "image", "image": image_pil},
-                    {"type": "text", "text": prompt},
+                    {"type": "text", "text": combined_prompt},
                 ],
             }
         ]
