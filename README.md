@@ -16,7 +16,23 @@ Dataen kan leveres videre til systemer som viser tider på storskjerm. Dette er 
 Oppgaven blir å finne kameraer som fungerer å bruke i ishaller, identifisere og trene modeller og sy dette sammen til et system som utfører oppgaven
 
 
-Keybinds
-YOLO ROI = r
-OCR ROI = o
-Finish line = f
+## Keybinds
+
+### Wide camera
+| Key | Action |
+|-----|--------|
+| `r` | Set/replace YOLO ROI (detection region) |
+| `o` | Set/replace OCR ROI (number recognition, must be inside YOLO ROI) |
+| `f` | Set/replace finish line (for lap counting) |
+
+### Close camera
+| Key | Action |
+|-----|--------|
+| `c` | Set/replace close YOLO ROI (detection region) |
+| `v` | Set/replace close OCR ROI (number recognition, must be inside close YOLO ROI) |
+
+### Global
+| Key | Action |
+|-----|--------|
+| `Space` | Pause/resume |
+| `Esc` | Quit
