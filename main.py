@@ -10,7 +10,7 @@ import supervision as sv
 
 # Profiler (toggle ENABLE_PROFILING below)
 from utilities.profiler import Profiler
-ENABLE_PROFILING = True
+ENABLE_PROFILING = False
 
 # From functions folder
 from functions.detection.close_inference import run_close_inference

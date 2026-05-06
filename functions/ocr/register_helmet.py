@@ -94,7 +94,7 @@ def init_ocr_client(base_url: str, model: str) -> None:
         "local_files_only": local_files_only,
     }
     if torch.cuda.is_available():
-        model_kwargs["torch_dtype"] = torch.float16
+        model_kwargs["dtype"] = torch.float16
 
     ocr_model = AutoModelForImageTextToText.from_pretrained(model_source, **model_kwargs)
 
@@ -112,10 +112,15 @@ def init_ocr_client(base_url: str, model: str) -> None:
 
 def _parse_ocr_response(raw_text: str) -> tuple[str, float]:
     """
-    Extract digits and confidence from GLM-OCR response.
+    Extract digits and confidence from model response.
 
-    Expected format: NUMBER|CONFIDENCE (e.g. '42|0.95' or 'NONE|0.0')
-    Falls back to old cleanliness-based parsing if pipe-delimited format not found.
+    IMPORTANT: The model doesn't reliably follow formatting instructions,
+    so we enforce constraints in code:
+    - Exactly 3 digits (take first 3, reject if fewer)
+    - Confidence rounded to 1 decimal, clamped 0-100
+
+    Expected format: NUMBER|CONFIDENCE (e.g. '123|85' or 'NONE|0')
+    Falls back to non-pipe parsing if pipe-delimited format not found.
 
     Returns:
         Tuple of (digit_string, confidence_percentage)
@@ -135,30 +140,62 @@ def _parse_ocr_response(raw_text: str) -> tuple[str, float]:
         if number_part.lower() in ("none", "unknown"):
             return "", 0.0
 
+        # Extract all digits from number part
         digits = re.sub(r"\D", "", number_part)
-        if not digits:
+
+        # Enforce exactly 3 digits: take first 3, reject if fewer
+        if len(digits) < 3:
+            logger.debug("Rejected: only %d digits found: '%s' (raw: '%s')",
+                        len(digits), digits, number_part)
             return "", 0.0
+        digits = digits[:3]  # Take first 3 digits only
 
         try:
             conf = float(conf_part)
-            # Convert 0-1 scale to percentage
-            confidence = (conf * 100.0) if conf <= 1.0 else min(conf, 100.0)
+            # Model sometimes outputs 0-1 instead of 0-100. Scale up if needed.
+            if conf <= 1.0:
+                conf = conf * 100.0
+            confidence = round(min(max(conf, 0.0), 100.0), 1)
         except ValueError:
-            # If confidence can't be parsed, fall back to cleanliness ratio
-            digits = re.sub(r"\D", "", text)
-            if not digits:
-                return "", 0.0
+            # Confidence couldn't be parsed — use digit cleanliness as fallback
             confidence = (len(digits) / max(len(text), 1)) * 100.0
 
         return digits, confidence
 
-    # Fallback: old cleanliness-based parsing for non-pipe responses
+    # Fallback: non-pipe response (model ignored the format)
     digits = re.sub(r"\D", "", text)
-    if not digits:
+    if len(digits) < 3:
         return "", 0.0
-
+    digits = digits[:3]
     confidence = (len(digits) / max(len(text), 1)) * 100.0
     return digits, confidence
+
+
+# Default prompt — kept as fallback if config doesn't provide one
+_DEFAULT_OCR_PROMPT = """Identify the 3-digit helmet number in this image.
+
+Return EXACTLY this format, nothing else:
+NUMBER|CONFIDENCE
+
+Where:
+- NUMBER is exactly 3 digits (000-999). If no number visible, write NONE.
+- CONFIDENCE is an integer 0-100. No decimals.
+
+Examples:
+123|85
+007|90
+NONE|0"""
+
+_OCR_SYSTEM_PROMPT = (
+    "You are a helmet number reader. Follow these rules EXACTLY:\n"
+    "1. Read the number on the helmet. It is always 3 digits (000-999).\n"
+    "2. If no number is visible, write NONE.\n"
+    "3. Output ONLY this format: NUMBER|CONFIDENCE\n"
+    "4. NUMBER must be exactly 3 digits.\n"
+    "5. CONFIDENCE must be an integer from 0 to 100. NO decimals.\n"
+    "6. Return ONLY the answer line. No explanations. No extra text.\n"
+    "Examples: 123|85  |  007|90  |  NONE|0"
+)
 
 
 def register_helmet(
@@ -263,6 +300,10 @@ def _call_ocr(client, image_bgr: np.ndarray, prompt: str, model: str, timeout: f
     try:
         messages = [
             {
+                "role": "system",
+                "content": _OCR_SYSTEM_PROMPT,
+            },
+            {
                 "role": "user",
                 "content": [
                     {"type": "image", "image": image_pil},
@@ -275,6 +316,7 @@ def _call_ocr(client, image_bgr: np.ndarray, prompt: str, model: str, timeout: f
             inputs = processor.apply_chat_template(
                 messages,
                 add_generation_prompt=True,
+                enable_thinking=False,
                 tokenize=True,
                 return_dict=True,
                 return_tensors="pt",

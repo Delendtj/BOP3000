@@ -198,7 +198,7 @@ class OCRWorker:
         shm_dtype: str = "uint8",
         ocr_base_url: str = "http://127.0.0.1:1234/v1",
         ocr_model: str = "glm-ocr",
-        ocr_prompt: str = "Identify the helmet number in this image. Return exactly in this format: NUMBER|CONFIDENCE where CONFIDENCE is a decimal between 0 and 1 (e.g. '42|0.95'). If no number is visible, return: NONE|0.0",
+        ocr_prompt: str = "Identify the 3-digit helmet number in this image.\n\nReturn EXACTLY this format, nothing else:\nNUMBER|CONFIDENCE\n\nWhere:\n- NUMBER is exactly 3 digits (000-999). If no number visible, write NONE.\n- CONFIDENCE is an integer 0-100. No decimals.\n\nExamples:\n123|85\n007|90\nNONE|0",
 
         ocr_timeout: float = 5.0,
     ):
