@@ -126,7 +126,8 @@ class CrossState:
 
 class LapCounter:
     def __init__(self, frame_rate=30.0, finish_line=None, total_laps=None):
-        # Counts are keyed by person tracker_id and kept only in memory.
+        # Counts are keyed by persistent helmet number when confirmed, otherwise
+        # by a temporary ByteTrack track key.
         self.frame_rate = float(frame_rate) if float(frame_rate) > 0 else 30.0
         self.finish_line = None
         self.total_laps = int(total_laps) if total_laps is not None else None
@@ -157,34 +158,53 @@ class LapCounter:
         self.person_lap_counts.clear()
         self.person_cross_state.clear()
 
-    def get_lap_count(self, track_id):
-        # Return the current lap count for one tracker ID.
-        return int(self.person_lap_counts.get(int(track_id), 0))
+    def _identity_key(self, track_id, helmet_number=-1):
+        if helmet_number not in (-1, None, ""):
+            return ("helmet", str(helmet_number))
+        return ("track", int(track_id))
+
+    def get_lap_count(self, track_id, helmet_number=-1):
+        return int(self.person_lap_counts.get(self._identity_key(track_id, helmet_number), 0))
+
+    def confirm_identity(self, track_id, helmet_number):
+        temp_key = self._identity_key(track_id)
+        helmet_key = self._identity_key(track_id, helmet_number)
+
+        if temp_key in self.person_lap_counts:
+            self.person_lap_counts[helmet_key] += int(self.person_lap_counts.pop(temp_key))
+
+        if temp_key in self.person_cross_state:
+            self.person_cross_state[helmet_key] = self.person_cross_state.pop(temp_key)
 
     def get_active_lap_counts(self, people_tracks):
-        # Build the row model consumed by the lap panel.
         rows = []
         for i, tid in enumerate(people_tracks.tracker_id):
             tid = int(tid)
             if tid == -1:
                 continue
+
             helmet_number = -1
             if "helmet_number" in people_tracks.data:
                 helmet_number = people_tracks.data["helmet_number"][i]
-            display_id = helmet_number if helmet_number not in (-1, None, "") else tid
+
+            if helmet_number not in (-1, None, ""):
+                display_id = helmet_number
+            else:
+                display_id = f"T{tid}"
+
             rows.append(
                 {
                     "track_id": tid,
                     "display_id": display_id,
-                    "lap_count": self.get_lap_count(tid),
+                    "lap_count": self.get_lap_count(tid, helmet_number),
                     "predicted": bool(people_tracks.confidence[i] == 0),
                 }
             )
+
         rows.sort(key=lambda row: display_sort_key(row["display_id"]))
         return rows
 
     def update(self, people_tracks):
-        # Process one frame of tracked people and increment laps when needed.
         self.frame_index += 1
         if self.finish_line is None or len(people_tracks) == 0:
             self._cleanup_cross_state(set())
@@ -197,11 +217,17 @@ class LapCounter:
             if tid == -1:
                 continue
 
-            active_ids.add(tid)
+            helmet_number = -1
+            if "helmet_number" in people_tracks.data:
+                helmet_number = people_tracks.data["helmet_number"][i]
+
+            identity_key = self._identity_key(tid, helmet_number)
+            active_ids.add(identity_key)
+
             point = bbox_bottom_right(people_tracks.xyxy[i])
             current_offset = finish_line_offset(point, self.finish_line)
             near_line = point_near_finish_line(point, self.finish_line, self.finish_line_band_px)
-            state = self.person_cross_state.get(tid, CrossState())
+            state = self.person_cross_state.get(identity_key, CrossState())
             state.last_seen_frame = self.frame_index
 
             if self.frame_index >= state.cooldown_until:
@@ -218,21 +244,21 @@ class LapCounter:
                     current_offset,
                     self.min_lap_movement_px,
                 ):
-                    self.person_lap_counts[tid] += 1
+                    self.person_lap_counts[identity_key] += 1
                     state.armed = False
                     state.cooldown_until = self.frame_index + self.lap_cooldown_frames
 
             state.last_point = point
             state.last_offset = current_offset
-            self.person_cross_state[tid] = state
+            self.person_cross_state[identity_key] = state
 
         self._cleanup_cross_state(active_ids)
 
     def _cleanup_cross_state(self, active_ids):
         # Drop stale per-track motion state after tracks disappear.
-        for tid in list(self.person_cross_state.keys()):
-            state = self.person_cross_state[tid]
-            if tid in active_ids:
+        for identity_key in list(self.person_cross_state.keys()):
+            state = self.person_cross_state[identity_key]
+            if identity_key in active_ids:
                 continue
             if self.frame_index - state.last_seen_frame > self.cross_state_ttl_frames:
-                del self.person_cross_state[tid]
+                del self.person_cross_state[identity_key]
