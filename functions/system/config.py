@@ -82,16 +82,11 @@ def create_config(path):
         "PROMPT": """Identify the 3-digit helmet number in this image.
 
 Return EXACTLY this format, nothing else:
-NUMBER|CONFIDENCE
+NUMBER
 
 Where:
-- NUMBER is exactly 3 digits (000-999). If no number visible, write NONE.
-- CONFIDENCE is an integer 0-100. No decimals.
-
-Examples:
-123|85
-007|90
-NONE|0""",
+- NUMBER is exactly 3 digits (000-999).
+- Return only the 3 digits. No words, punctuation, or extra text.""",
 
         "TIMEOUT": "5",
     }
@@ -173,16 +168,12 @@ def load_config(path):
             "PROMPT": config.get("OCR", "PROMPT", fallback="""Identify the 3-digit helmet number in this image.
 
 Return EXACTLY this format, nothing else:
-NUMBER|CONFIDENCE
+NUMBER
 
 Where:
-- NUMBER is exactly 3 digits (000-999). If no number visible, write NONE.
-- CONFIDENCE is an integer 0-100. No decimals.
-
-Examples:
-123|85
-007|90
-NONE|0"""),
+- NUMBER is exactly 3 digits (000-999).
+- Return only the 3 digits. No words, punctuation, or extra text.
+"""),
             "TIMEOUT": config.getfloat("OCR", "TIMEOUT", fallback=5.0),
         },
     }

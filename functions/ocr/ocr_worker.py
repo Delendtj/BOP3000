@@ -198,7 +198,7 @@ class OCRWorker:
         shm_dtype: str = "uint8",
         ocr_base_url: str = "http://127.0.0.1:1234/v1",
         ocr_model: str = "glm-ocr",
-        ocr_prompt: str = "Identify the 3-digit helmet number in this image.\n\nReturn EXACTLY this format, nothing else:\nNUMBER|CONFIDENCE\n\nWhere:\n- NUMBER is exactly 3 digits (000-999). If no number visible, write NONE.\n- CONFIDENCE is an integer 0-100. No decimals.\n\nExamples:\n123|85\n007|90\nNONE|0",
+        ocr_prompt: str = "Identify the 3-digit helmet number in this image.\n\nReturn EXACTLY this format, nothing else:\nNUMBER\n\nWhere:\n- NUMBER is exactly 3 digits (000-999).\n- Return only the 3 digits. No words, punctuation, or extra text.",
 
         ocr_timeout: float = 5.0,
     ):
@@ -220,6 +220,7 @@ class OCRWorker:
         self._ocr_model = ocr_model
         self._ocr_prompt = ocr_prompt
         self._ocr_timeout = ocr_timeout
+        self._pending_track_ids: set[int] = set()
 
         # Simply counters for benchmarking
         self._stats: Dict[str, Any] = {
@@ -332,6 +333,7 @@ class OCRWorker:
         # Set them to none so no one can reuse old queues.
         self.ocr_in_queue = None
         self.ocr_out_queue = None
+        self._pending_track_ids.clear()
 
     def submit(self, item: Dict[str, Any]) -> bool:
         """
@@ -341,6 +343,12 @@ class OCRWorker:
         latency low and still tries to enqueue the newest task.
         """
         payload = dict(item)
+        tid = int(payload.get("track_id", -1))
+        if tid == -1:
+            return False
+        if tid in self._pending_track_ids:
+            return False
+
         image = payload.get("image")
         if isinstance(image, np.ndarray) and self._ring is not None:
             img = image
@@ -371,21 +379,28 @@ class OCRWorker:
             return False
 
         # We enqueue lightweight metadata
-        accepted, dropped = _drop_oldest_and_put(self.ocr_in_queue, payload)
+        dropped_track_id: Optional[int] = None
+        try:
+            self.ocr_in_queue.put_nowait(payload)
+            accepted, dropped = True, False
+        except Full:
+            try:
+                dropped_item = self.ocr_in_queue.get_nowait()
+                dropped_track_id = int(dropped_item.get("track_id", -1)) if isinstance(dropped_item, dict) else None
+            except Empty:
+                accepted, dropped = False, False
+            else:
+                try:
+                    self.ocr_in_queue.put_nowait(payload)
+                    accepted, dropped = True, True
+                except Full:
+                    accepted, dropped = False, True
         if accepted:
+            self._pending_track_ids.add(tid)
             _inc(self._stats["in_enqueued"])
-            #print(
-            #    "[ocr-worker] submit:",
-            #    {
-            #        "track_id": payload.get("track_id"),
-            #        "bbox": payload.get("bbox"),
-            #        "has_inline_image": "image" in payload and payload.get("image") is not None,
-            #        "shm_slot": payload.get("shm_slot"),
-            #        "shm_h": payload.get("shm_h"),
-            #        "shm_w": payload.get("shm_w"),
-            #    },
-            #)
         if dropped:
+            if dropped_track_id is not None and dropped_track_id != -1:
+                self._pending_track_ids.discard(dropped_track_id)
             _inc(self._stats["in_dropped_oldest"])
         return accepted
 
@@ -406,6 +421,9 @@ class OCRWorker:
                         "ocr_conf": item.get("ocr_conf"),
                     },
                 )
+                tid = int(item.get("track_id", -1))
+                if tid != -1:
+                    self._pending_track_ids.discard(tid)
                 items.append(item)
             except Empty:
                 break

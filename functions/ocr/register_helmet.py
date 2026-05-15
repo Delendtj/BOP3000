@@ -1,4 +1,4 @@
-"""
+﻿"""
 Helmet OCR processing module.
 
 Processes cropped helmet images via a Hugging Face `transformers` vision-language
@@ -174,6 +174,9 @@ def init_ocr_client(base_url: str, model: str) -> None:
         "local_files_only": local_files_only,
     }
     if torch.cuda.is_available():
+        torch.backends.cuda.matmul.allow_tf32 = True
+        torch.backends.cudnn.allow_tf32 = True
+        torch.backends.cudnn.benchmark = True
         model_kwargs["dtype"] = torch.float16
 
     ocr_model = AutoModelForImageTextToText.from_pretrained(model_source, **model_kwargs)
@@ -181,6 +184,11 @@ def init_ocr_client(base_url: str, model: str) -> None:
     device = "cuda" if torch.cuda.is_available() else "cpu"
     ocr_model = ocr_model.to(device)
     ocr_model.eval()
+    logger.info(
+        "OCR model loaded on %s%s",
+        device,
+        f" ({torch.cuda.get_device_name(0)})" if device == "cuda" else "",
+    )
 
     _ocr_client = {
         "processor": processor,
@@ -192,90 +200,30 @@ def init_ocr_client(base_url: str, model: str) -> None:
 
 def _parse_ocr_response(raw_text: str) -> tuple[str, float]:
     """
-    Extract digits and confidence from model response.
-
-    IMPORTANT: The model doesn't reliably follow formatting instructions,
-    so we enforce constraints in code:
-    - Exactly 3 digits (take first 3, reject if fewer)
-    - Confidence rounded to 1 decimal, clamped 0-100
-
-    Expected format: NUMBER|CONFIDENCE (e.g. '123|85' or 'NONE|0')
-    Falls back to non-pipe parsing if pipe-delimited format not found.
-
-    Returns:
-        Tuple of (digit_string, confidence_percentage)
+    Accept only a strict single-line 3-digit response.
     """
     if not raw_text or raw_text.strip().lower() == "unknown":
         return "", 0.0
 
     text = raw_text.strip()
-
-    # Try pipe-delimited format: NUMBER|CONFIDENCE
-    parts = text.split("|")
-    if len(parts) >= 2:
-        number_part = parts[0].strip()
-        conf_part = parts[1].strip()
-
-        # Handle NONE/UNKNOWN responses
-        if number_part.lower() in ("none", "unknown"):
-            return "", 0.0
-
-        # Extract all digits from number part
-        digits = re.sub(r"\D", "", number_part)
-
-        # Enforce exactly 3 digits: take first 3, reject if fewer
-        if len(digits) < 3:
-            logger.debug("Rejected: only %d digits found: '%s' (raw: '%s')",
-                        len(digits), digits, number_part)
-            return "", 0.0
-        digits = digits[:3]  # Take first 3 digits only
-
-        try:
-            conf = float(conf_part)
-            # Model sometimes outputs 0-1 instead of 0-100. Scale up if needed.
-            if conf <= 1.0:
-                conf = conf * 100.0
-            confidence = round(min(max(conf, 0.0), 100.0), 1)
-        except ValueError:
-            # Confidence couldn't be parsed — use digit cleanliness as fallback
-            confidence = (len(digits) / max(len(text), 1)) * 100.0
-
-        return digits, confidence
-
-    # Fallback: non-pipe response (model ignored the format)
-    digits = re.sub(r"\D", "", text)
-    if len(digits) < 3:
+    match = re.fullmatch(r"(\d{3})", text)
+    if not match:
+        logger.debug("Rejected non-strict OCR response: raw=%r", raw_text)
         return "", 0.0
-    digits = digits[:3]
-    confidence = (len(digits) / max(len(text), 1)) * 100.0
-    return digits, confidence
 
+    return match.group(1), 100.0
 
-# Default prompt — kept as fallback if config doesn't provide one
+# Default prompt â€” kept as fallback if config doesn't provide one
 _DEFAULT_OCR_PROMPT = """Identify the 3-digit helmet number in this image.
 
 Return EXACTLY this format, nothing else:
-NUMBER|CONFIDENCE
+NUMBER
 
 Where:
-- NUMBER is exactly 3 digits (000-999). If no number visible, write NONE.
-- CONFIDENCE is an integer 0-100. No decimals.
+- NUMBER is exactly 3 digits (000-999).
+- Return only the 3 digits. No words, punctuation, or extra text."""
 
-Examples:
-123|85
-007|90
-NONE|0"""
-
-_OCR_SYSTEM_PROMPT = (
-    "You are a helmet number reader. Follow these rules EXACTLY:\n"
-    "1. Read the number on the helmet. It is always 3 digits (000-999).\n"
-    "2. If no number is visible, write NONE.\n"
-    "3. Output ONLY this format: NUMBER|CONFIDENCE\n"
-    "4. NUMBER must be exactly 3 digits.\n"
-    "5. CONFIDENCE must be an integer from 0 to 100. NO decimals.\n"
-    "6. Return ONLY the answer line. No explanations. No extra text.\n"
-    "Examples: 123|85  |  007|90  |  NONE|0"
-)
+_OCR_SYSTEM_PROMPT = "3 digits only"
 
 
 def register_helmet(
@@ -376,9 +324,10 @@ def _call_ocr(client, image_bgr: np.ndarray, prompt: str, model: str, timeout: f
     processor = client["processor"]
     ocr_model = client["model"]
     device = client["device"]
+    model_dtype = next(ocr_model.parameters()).dtype if hasattr(ocr_model, "parameters") else None
 
     try:
-        combined_prompt = f"{_OCR_SYSTEM_PROMPT}\n\n{prompt}".strip()
+        combined_prompt = _OCR_SYSTEM_PROMPT
         messages = [
             {
                 "role": "user",
@@ -399,17 +348,23 @@ def _call_ocr(client, image_bgr: np.ndarray, prompt: str, model: str, timeout: f
                 return_tensors="pt",
             )
         else:
-            inputs = processor(images=image_pil, text=prompt, return_tensors="pt")
+            inputs = processor(images=image_pil, text=combined_prompt, return_tensors="pt")
 
-        inputs = {
-            key: value.to(device) if hasattr(value, "to") else value
-            for key, value in inputs.items()
-        }
+        normalized_inputs = {}
+        for key, value in inputs.items():
+            if not hasattr(value, "to"):
+                normalized_inputs[key] = value
+                continue
+            if device == "cuda" and getattr(value, "is_floating_point", lambda: False)():
+                normalized_inputs[key] = value.to(device=device, dtype=model_dtype, non_blocking=True)
+            else:
+                normalized_inputs[key] = value.to(device=device, non_blocking=(device == "cuda"))
+        inputs = normalized_inputs
 
         with torch.inference_mode():
             outputs = ocr_model.generate(
                 **inputs,
-                max_new_tokens=16,
+                max_new_tokens=3,
                 do_sample=False,
             )
 
@@ -417,8 +372,12 @@ def _call_ocr(client, image_bgr: np.ndarray, prompt: str, model: str, timeout: f
         tokens = outputs[0][prompt_len:] if prompt_len else outputs[0]
 
         if hasattr(processor, "decode"):
-            return processor.decode(tokens, skip_special_tokens=True).strip()
-        return processor.batch_decode([tokens], skip_special_tokens=True)[0].strip()
+            decoded = processor.decode(tokens, skip_special_tokens=True).strip()
+        else:
+            decoded = processor.batch_decode([tokens], skip_special_tokens=True)[0].strip()
+
+        first_line = next((line.strip() for line in decoded.splitlines() if line.strip()), "")
+        return first_line
     except Exception as exc:
         logger.warning("Transformers OCR call failed: %s(%s)", type(exc).__name__, exc)
         return "unknown"
@@ -567,3 +526,4 @@ def _save_ocr_debug_images(
     output_path = DEBUG_OCR_LOGS_DIR / f"ocr_debug_{_debug_image_counter:04d}_tid{track_id}.png"
     cv2.imwrite(str(output_path), combined)
     _debug_image_counter += 1
+
