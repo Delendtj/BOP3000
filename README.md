@@ -36,3 +36,24 @@ Oppgaven blir å finne kameraer som fungerer å bruke i ishaller, identifisere o
 |-----|--------|
 | `Space` | Pause/resume |
 | `Esc` | Quit
+
+# Setup
+
+Installer dependencies:
+	# pip install -r requirments.txt tensorrt
+
+Sett opp homography basert til banen som systemet skal brukes på.
+(Foreløpig forventer skriptet at det sendes inn video og ike direkte kamera input)
+
+Homogrpahy setup:
+	# python utilities/make_homography.py --wide WIDE_VIDEO --close CLOSE_VIDEO
+
+NOTE: 
+	Det er veldig viktig at punktenes rekke følge er samme når du lager H for begge vinklene
+	Ellers blir beregningen feil! 
+
+	Den virutelle banen per nå er predefinert med 11 punkter på banen.
+	Disse vises top venstre når du har valgt bilde for homography.
+	Derfor må du velge en frame der man kan se alle disse puntkene på banen.
+
+(Homography per kamera lagres defualt til img/homography_close.json og img/homogrpahy_wide.json)
