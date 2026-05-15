@@ -1,6 +1,15 @@
 import numpy as np
 import cv2
 
+
+"""
+Camera calibration intrinsics for the wide camera setup.
+These depend on the camera/lens/capture settings used during calibration
+(for example zoom, resolution mode, crop mode, lens), not on where the
+camera is physically placed or pointed in the arena.
+
+These could (should) be moved into its own json/config file.
+"""
 DIM = (3840, 2160)  # (width, height) used during calibration
 
 K = np.array(

@@ -32,10 +32,7 @@ def build_rink_view(
 ) -> np.ndarray:
     """
     Simply a helper for building the rink window. (less bloat inside main)
-    This could maybe be moved to another file so that we don't get too many files.
     """
-
-
     rink_canvas = build_rink_canvas(
         bounds,
         canvas_size,
@@ -75,6 +72,7 @@ def build_rink_view(
     )
 
     if wide_rink_points and close_rink_points:
+        # p[0] is the rink_xy. Not the canvas_xy
         wide_xy = [p[0] for p in wide_rink_points]
         close_xy = [p[0] for p in close_rink_points]
         matches = hungarian_assign(wide_xy, close_xy, max_dist=max_dist)
