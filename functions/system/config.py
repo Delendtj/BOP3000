@@ -42,6 +42,7 @@ def create_config(path):
         "PERSON_CLASS_ID": "1"
     }
 
+    # Keep runtime and detector confidence defaults aligned from one constant.
     CONF_THRESHOLD = 0.2
 
     config["Inference"] = {
@@ -142,6 +143,7 @@ def load_config(path):
             "max_det": config.getint("Inference", "max_det"),
             "imgsz": config.getint("Inference", "imgsz"),
             "half": config.getboolean("Inference", "half"),
+            # Treat an empty device string as auto-select so callers can pass None downstream.
             "device": config["Inference"]["device"] or None,
             "verbose": config.getboolean("Inference", "verbose"),
         },
@@ -164,6 +166,7 @@ def load_config(path):
         "OCR": {
             "BACKEND": config.get("OCR", "BACKEND", fallback="transformers"),
             "BASE_URL": config.get("OCR", "BASE_URL", fallback=""),
+            # Prefer MODEL_ID when present to support older configs that used MODEL.
             "MODEL": config.get("OCR", "MODEL_ID", fallback=config.get("OCR", "MODEL", fallback="models/ocr_model")),
             "PROMPT": config.get("OCR", "PROMPT", fallback="""Identify the 3-digit helmet number in this image.
 

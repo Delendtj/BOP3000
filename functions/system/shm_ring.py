@@ -32,13 +32,13 @@ class SharedMemoryRing:
         self.channels = int(channels)
         self.dtype = np.dtype(dtype)
 
-        # Size per memory slot (1 slot = 1 image)
+        # Size per memory slot (1 slot = 1 image) in bytes
         # image size expected max_h and max_w
         # color channels (3)
         # bytes per channel. dtype("uint8") = 1
         self._slot_bytes = self.max_h * self.max_w * self.channels * self.dtype.itemsize
 
-        # size per slot * number of slots
+        # Total size of SHMR
         size = self._slot_bytes * self.slots
 
         # Allocate new memory space
@@ -56,17 +56,21 @@ class SharedMemoryRing:
 
         # Places lock so that two writes don't pick same idx at the same time.
         # Doesn't prevent writer from writing on data currently being read.
+        # THe lock is applied to this SharedMemoryRing object.
         with self._lock:
             idx = self._write_idx
             # Increment by one, but wrap around back to zero if it goes over self.slots
             self._write_idx = (self._write_idx + 1) % self.slots
 
+        # Interval of memory where we are writing to
         start = idx * self._slot_bytes
         end = start + self._slot_bytes
+        # Create numpy array for that shared memory slot/buffer
         slot = np.ndarray(
+            # The actual object shape (image)
             (self.max_h, self.max_w, self.channels),
             dtype=self.dtype,
-            buffer=self._shm.buf[start:end],
+            buffer=self._shm.beuf[start:end],
         )
         # Actually write into memory
         slot[:h, :w, :] = image
@@ -75,15 +79,17 @@ class SharedMemoryRing:
         return idx, int(h), int(w)
 
     def read(self, idx: int, h: int, w: int) -> np.ndarray:
+        # Interval of memory we are reading from.
         start = int(idx) * self._slot_bytes
         end = start + self._slot_bytes
+        # Numpy array of given place in memory (start, end)
         slot = np.ndarray(
             (self.max_h, self.max_w, self.channels),
             dtype=self.dtype,
             buffer=self._shm.buf[start:end],
         )
 
-        # Retrieve from ememory
+        # Retrieve from memory
         return slot[: int(h), : int(w), :]
 
     def close(self) -> None:

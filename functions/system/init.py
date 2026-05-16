@@ -23,6 +23,10 @@ from functions.visualization.visualization import compute_window_layout, get_scr
 
 @dataclass
 class AppContext:
+    """
+    Data class for all runtime variables used directly in main is initialized and stored in this AppContext.
+    It is to prevent lengthy init code inside of main.
+    """
     model: Any
     tracker: Tracker
     pipeline: AsyncFramePipeline
@@ -63,6 +67,7 @@ def initialize(config, *, dashboard_window_name: str) -> AppContext | None:
         print("Startup cancelled before race setup was completed.")
         return None
 
+    # Imported helmet numbers from user (CSV)
     helmet_numbers = startup_setup.helmet_numbers
     total_laps = startup_setup.total_laps
 
@@ -86,6 +91,7 @@ def initialize(config, *, dashboard_window_name: str) -> AppContext | None:
     rink_canvas_size = window_layout["rink_canvas_size"]
     lap_panel_width, lap_panel_height = window_layout["lap_panel_size"]
 
+    # Check if the video source and ROI for WIDE camera exists.
     preview_cap = cv2.VideoCapture(config["Path"]["WIDE_SOURCE"])
     fps = preview_cap.get(cv2.CAP_PROP_FPS)
     wide_ret, preview_frame = preview_cap.read()
@@ -93,7 +99,7 @@ def initialize(config, *, dashboard_window_name: str) -> AppContext | None:
     preview_frame = downscale_to_1080p(preview_frame)
     if not wide_ret:
         raise RuntimeError("Could not read initial frame for ROI.")
-
+    # Check if the video source and ROI for CLOSE camera exists.
     close_preview_cap = cv2.VideoCapture(config["Path"]["CLOSE_SOURCE"])
     close_ret, close_preview_frame = close_preview_cap.read()
     close_preview_cap.release()

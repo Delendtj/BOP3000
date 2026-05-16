@@ -134,9 +134,12 @@ def hungarian_assign(
             dx = left[i, 0] - right[j, 0]
             dy = left[i, 1] - right[j, 1]
             dist = float((dx * dx + dy * dy) ** 0.5)
+            # If the distance is less than max_dist then we can put it into the matrice for the actual hungarian assign
             if dist <= max_dist:
                 cost[i, j] = dist
 
+    # Applies hungarian assignment
+    # This is based on the cost matrice 'cost'
     assignments = _hungarian(cost)
     matches = []
     for i, j in assignments:
