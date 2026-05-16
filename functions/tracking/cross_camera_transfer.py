@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import Iterable
 
-import numpy as np
 import supervision as sv
 
 from functions.spatial.rink_projection import project_bbox_to_rink
@@ -12,6 +11,7 @@ from functions.tracking.assignment import hungarian_assign
 def build_close_to_wide_mapping(
     wide_tracks: sv.Detections,
     close_people: sv.Detections,
+    # Homography
     wide_rink_h,
     close_rink_h,
     *,
@@ -19,17 +19,18 @@ def build_close_to_wide_mapping(
     max_dist: float,
 ) -> dict[int, int]:
     if (
-        wide_rink_h is None
-        or close_rink_h is None
-        or wide_tracks is None
-        or close_people is None
-        or len(wide_tracks) == 0
-        or len(close_people) == 0
+            wide_rink_h is None
+            or close_rink_h is None
+            or wide_tracks is None
+            or close_people is None
+            or len(wide_tracks) == 0
+            or len(close_people) == 0
     ):
         return {}
 
     wide_rink_pts = []
     wide_track_ids = []
+    # Project/map WIDE detections points into rink
     for idx, bbox in enumerate(wide_tracks.xyxy):
         rink_pt = project_bbox_to_rink(bbox, wide_rink_h, undistort=True, img_shape=img_shape)
         if rink_pt is None:
@@ -39,6 +40,7 @@ def build_close_to_wide_mapping(
 
     close_rink_pts = []
     close_person_indices = []
+    # Project/map CLOSE detections points into rink
     for idx, bbox in enumerate(close_people.xyxy):
         rink_pt = project_bbox_to_rink(bbox, close_rink_h)
         if rink_pt is None:
@@ -49,7 +51,9 @@ def build_close_to_wide_mapping(
     if not wide_rink_pts or not close_rink_pts:
         return {}
 
+    # Matches them with Hungarian Algorithm
     matches = hungarian_assign(wide_rink_pts, close_rink_pts, max_dist=max_dist)
+    # Creates the actual map between the close and wide tracks, and returns it.
     mapping = {}
     for wide_idx, close_idx, _ in matches:
         if wide_idx < len(wide_track_ids) and close_idx < len(close_person_indices):

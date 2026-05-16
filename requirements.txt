@@ -8,3 +8,4 @@ torch>=2.2.0
 transformers>=4.44.0
 huggingface_hub>=0.24.0
 pillow>=10.0.0
+screeninfo~=0.8.1

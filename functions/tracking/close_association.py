@@ -22,6 +22,8 @@ def match_close_helmets_to_people(
     """
     Matches the top centers of a helmets with the top centers of people bboxes to associate helmet number (ID)
     This is necessary to later associate people bboxes across screens.
+
+    This is used on the close camera perspective, since this is where we detect both people and helmets.
     """
     if (
         close_helmets is None

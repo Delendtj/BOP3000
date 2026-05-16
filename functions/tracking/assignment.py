@@ -117,6 +117,10 @@ def hungarian_assign(
     """
     One-to-one assignment between wide_points and close_points using Hungarian algorithm.
     Returns (wide_idx, close_idx, dist) for assignments within max_dist.
+
+    This is not a greedy algorithm (one that simply picks the closest)
+    The algorithm is design to find pair detections based on minimum total distance between each wide and close detections.
+    So if a 'wide detection' is close to a 'close detection' it will not connect if the total distance between every other wide and close points is not the shortest.
     """
     left = np.asarray(list(wide_points), dtype=np.float32)
     right = np.asarray(list(close_points), dtype=np.float32)
@@ -128,6 +132,7 @@ def hungarian_assign(
     size = max(n, m)
     big = max_dist * 1000.0 if max_dist > 0 else 1e6
 
+    # We apply dummy (big) for cells that don't have a row/column pair.
     cost = np.full((size, size), big, dtype=np.float32)
     for i in range(n):
         for j in range(m):
@@ -143,6 +148,8 @@ def hungarian_assign(
     assignments = _hungarian(cost)
     matches = []
     for i, j in assignments:
+        # Filter out dummy (big) cells
+        # Ensure that we are only working with n, m dims.
         if i < n and j < m:
             dist = float(cost[i, j])
             if dist <= max_dist:

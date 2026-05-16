@@ -1,8 +1,9 @@
 import logging
 import os
-import subprocess
+import importlib.util
+
+import torch
 from ultralytics import YOLO
-from functions.detection.tensor_loader import init_tensorrt
 
 
 class HardwareDetector:
@@ -11,42 +12,61 @@ class HardwareDetector:
         self.hardware_type = None
 
     def detect_hardware(self):
-        """Detect available hardware and choose the best backend."""
+        """Detect the best usable inference backend for this machine."""
         logger = logging.getLogger(__name__)
-        if self._has_nvidia_gpu():
+        can_use_tensorrt, reasons = self._can_use_tensorrt()
+        for reason in reasons:
+            logger.info(reason)
+
+        if can_use_tensorrt:
             self.hardware_type = 'cuda'
-            logger.info("NVIDIA GPU detected, using CUDA/TensorRT")
+            logger.info("Backend selection: TensorRT/CUDA")
             return 'cuda'
 
         self.hardware_type = 'openvino'
-        logger.info("No NVIDIA GPU found, using OpenVINO")
+        logger.info("Backend selection: OpenVINO/PyTorch fallback")
         return 'openvino'
 
-    def _has_nvidia_gpu(self):
-        """Return True if nvidia-smi reports at least one GPU."""
+    def _can_use_tensorrt(self):
+        """
+        Return whether the TensorRT path is usable.
+
+        This is stricter than checking for an NVIDIA GPU name because the
+        project needs a working CUDA + TensorRT Python runtime, not just
+        detectable hardware.
+        """
+        reasons = []
+
+        if not torch.cuda.is_available():
+            reasons.append("TensorRT check failed: torch.cuda.is_available() is False.")
+            return False, reasons
+        reasons.append("TensorRT check passed: CUDA device is available to PyTorch.")
+
+        if importlib.util.find_spec("tensorrt") is None:
+            reasons.append("TensorRT check failed: Python module 'tensorrt' is not installed.")
+            return False, reasons
+        reasons.append("TensorRT check passed: Python module 'tensorrt' is installed.")
+
         try:
-            result = subprocess.run(
-                ['nvidia-smi', '--query-gpu=name', '--format=csv,noheader'],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                timeout=3,
-                text=True
-            )
-            if result.returncode == 0 and result.stdout.strip():
-                logging.getLogger(__name__).debug("Found NVIDIA GPU: %s", result.stdout.strip())
-                return True
-        except (FileNotFoundError, subprocess.TimeoutExpired):
-            pass
-        return False
+            import tensorrt as trt
+
+            _ = trt.Logger(trt.Logger.WARNING)
+        except Exception as exc:
+            reasons.append(f"TensorRT check failed: import/runtime initialization error: {exc}")
+            return False, reasons
+
+        reasons.append("TensorRT check passed: TensorRT runtime imported successfully.")
+        return True, reasons
 
     def initialize_model(self):
         """Detect hardware (if not done yet) and return a ready-to-use model."""
         if self.hardware_type is None:
             self.detect_hardware()
 
-        logging.getLogger(__name__).info("Initializing %s model...", self.hardware_type.upper())
+        logging.getLogger(__name__).info("Initializing backend '%s'...", self.hardware_type)
 
         if self.hardware_type == 'cuda':
+            from functions.detection.tensor_loader import init_tensorrt
             return init_tensorrt(self.config)
         else:
             return self._init_openvino_model()
@@ -62,6 +82,7 @@ class HardwareDetector:
                 logger.info("Loading OpenVINO model: %s", ov_path)
                 model = YOLO(ov_path, task='detect')
                 logger.info("OpenVINO model loaded successfully")
+                self.hardware_type = 'openvino'
                 return model
             except Exception as e:
                 logger.error("OpenVINO loading failed: %s", e)
@@ -70,6 +91,7 @@ class HardwareDetector:
             logger.info("Loading PyTorch model (CPU fallback): %s", pt_path)
             model = YOLO(pt_path, task='detect')
             logger.info("PyTorch model loaded")
+            self.hardware_type = 'pytorch'
             return model
 
         raise FileNotFoundError(
