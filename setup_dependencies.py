@@ -1,4 +1,4 @@
-0# Fil litt bygget på hardware.detector
+# Fil litt bygget på hardware.detector
 # sjekker om nvidia gpu finnes
 # om ja, installerer cuda pakker
 # nei = installer openvino

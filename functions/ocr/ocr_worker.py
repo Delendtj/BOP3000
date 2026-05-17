@@ -1,6 +1,7 @@
 import multiprocessing as mp
 import os
 import time
+import traceback
 from queue import Empty, Full
 from typing import Any, Dict, List, Optional
 
@@ -10,6 +11,7 @@ from functions.system.shm_ring import SharedMemoryRing
 
 
 _STOP = "__STOP__"
+_READY = "__READY__"
 
 # Benchmark logging
 def _inc(counter, delta: int = 1) -> None:
@@ -54,6 +56,8 @@ def _ocr_process_main(
     model: str,
     prompt: str,
     timeout: float,
+    load_in_4bit: bool,
+    debug: bool,
 ) -> None:
     """
     OCR worker main loop.
@@ -61,10 +65,17 @@ def _ocr_process_main(
     GLM-OCR client is initialized in this process context (spawn mode requires
     re-init), avoiding serialization/pickling issues.
     """
-    from functions.ocr.register_helmet import register_helmet, init_ocr_client
+    from functions.ocr.helmet_ocr import register_helmet
+    from functions.ocr.helmet_ocr_llm import init_ocr_client
 
     # Init GLM-OCR client for spawned worker process
-    init_ocr_client(base_url, model)
+    init_ocr_client(base_url, model, load_in_4bit=load_in_4bit)
+
+    # Signal to the main process that the OCR model is ready
+    try:
+        out_queue.put_nowait(_READY)
+    except Full:
+        pass
 
     # We already make a shared memory in start()
     # We then connect to that same memory space by having create=False and correct name=shm_name input param
@@ -135,7 +146,7 @@ def _ocr_process_main(
                     model=model,
                     prompt=prompt,
                     timeout=timeout,
-                    debug=False,
+                    debug=debug,
                 )
                 elapsed_ms = (time.perf_counter() - t0) * 1000
 
@@ -164,6 +175,7 @@ def _ocr_process_main(
             except Exception:
                 _inc(stats["ocr_errors"])
                 print("[ocr-worker] register_helmet raised for track_id:", tid)
+                traceback.print_exc()
                 result = empty_result
 
             # Logging for stats
@@ -201,6 +213,8 @@ class OCRWorker:
         ocr_prompt: str = "Identify the 3-digit helmet number in this image.\n\nReturn EXACTLY this format, nothing else:\nNUMBER\n\nWhere:\n- NUMBER is exactly 3 digits (000-999).\n- Return only the 3 digits. No words, punctuation, or extra text.",
 
         ocr_timeout: float = 5.0,
+        ocr_load_in_4bit: bool = False,
+        ocr_debug: bool = False,
     ):
         self._ctx = mp.get_context(start_method)
         self.max_in_size = max_in_size
@@ -220,6 +234,8 @@ class OCRWorker:
         self._ocr_model = ocr_model
         self._ocr_prompt = ocr_prompt
         self._ocr_timeout = ocr_timeout
+        self._ocr_load_in_4bit = ocr_load_in_4bit
+        self._ocr_debug = ocr_debug
         self._pending_track_ids: set[int] = set()
 
         # Simply counters for benchmarking
@@ -286,11 +302,43 @@ class OCRWorker:
                 self._ocr_model,
                 self._ocr_prompt,
                 self._ocr_timeout,
+                self._ocr_load_in_4bit,
+                self._ocr_debug,
             ),
             daemon=False,
         )
         self._process.start()
 
+
+    def warmup(self, timeout: float = 60.0) -> bool:
+        """
+        Block until the OCR model client is ready in the worker process.
+
+        The worker process sends a _READY marker on the out_queue after
+        init_ocr_client() completes.  This method waits for that marker.
+
+        Returns:
+            True if the client became ready, False if timed out.
+        """
+        deadline = time.perf_counter() + timeout
+        while time.perf_counter() < deadline:
+            try:
+                item = self.ocr_out_queue.get(timeout=0.25)
+                if item == _READY:
+                    return True
+            except Empty:
+                pass
+        return False
+
+    def warmup_async(self) -> None:
+        """Fire-and-forget warmup.
+
+        Starts the worker process (which begins loading the model in the
+        background) and returns immediately.  Call ``warmup()`` later when
+        you are ready to accept frames, or just start submitting — the
+        worker will queue frames internally until the model is ready.
+        """
+        self.start()
 
     def stop(self, timeout: float = 2.0) -> None:
         """

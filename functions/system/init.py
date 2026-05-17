@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from collections import deque
 from dataclasses import dataclass
 from typing import Any
@@ -61,6 +62,7 @@ def initialize(config, *, dashboard_window_name: str) -> AppContext | None:
     Initialize needed variables/object that the main inference loop needs.
     It stores them within an instance of a AppContext class.
     """
+    logger = logging.getLogger(__name__)
 
     startup_setup = prompt_race_setup()
     if startup_setup is None:
@@ -75,7 +77,9 @@ def initialize(config, *, dashboard_window_name: str) -> AppContext | None:
     model = detector.initialize_model()
     print(f"Loaded {len(helmet_numbers)} helmet numbers from startup GUI.")
 
-    # Start OCR worker early so model loading happens in parallel with TensorRT
+    # Start OCR worker early so GLM loads in with TensorRT
+    # wait for the LLM to be ready before continuing,
+    # both models are warm when main starts.
     ocr_config = config.get("OCR", {})
     ocr_worker = OCRWorker(
         ocr_base_url=ocr_config.get("BASE_URL"),
@@ -84,6 +88,12 @@ def initialize(config, *, dashboard_window_name: str) -> AppContext | None:
         ocr_timeout=ocr_config.get("TIMEOUT"),
     )
     ocr_worker.start()
+    logger.info("Waiting for OCR model to load in parallel with TensorRT...")
+    ocr_ready = ocr_worker.warmup(timeout=60.0)
+    if ocr_ready:
+        logger.info("OCR model loaded successfully.")
+    else:
+        logger.warning("OCR model did not load within timeout — will retry on first use.")
 
     screen_width, screen_height = get_screen_size()
     window_layout = compute_window_layout(screen_width, screen_height)

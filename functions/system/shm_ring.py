@@ -70,7 +70,7 @@ class SharedMemoryRing:
             # The actual object shape (image)
             (self.max_h, self.max_w, self.channels),
             dtype=self.dtype,
-            buffer=self._shm.beuf[start:end],
+            buffer=self._shm.buf[start:end],
         )
         # Actually write into memory
         slot[:h, :w, :] = image
