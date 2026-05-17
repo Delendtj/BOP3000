@@ -1,3 +1,11 @@
+"""
+Explicit backend dependency setup utility.
+
+Examples:
+    python setup_dependencies.py --backend auto
+    python setup_dependencies.py --backend openvino
+    python setup_dependencies.py --backend tensorrt --dry-run
+    python setup_dependencies.py --backend pytorch --skip-common
 # Fil litt bygget på hardware.detector
 # sjekker om nvidia gpu finnes
 # om ja, installerer cuda pakker
@@ -5,91 +13,174 @@
 # denne gjør alt automatisk uten brukerinput
 # installerer heller ikke pakker som allerede finnes
 
-# Import-setninger
+This script is intentionally separate from normal app startup. It can inspect
+the machine, choose a likely backend, and install only the backend-specific
+packages you ask for.
+"""
+
+from __future__ import annotations
+
+import argparse
+import importlib.util
 import subprocess
 import sys
-import importlib.util
+from pathlib import Path
 
 
-# definerer klassen + oppdager hvilken hardware maskinen har
-# ikke nødvendig m/ brukerinput (installerer riktige pakker automatisk)
-class DependencyManager:
+ROOT = Path(__file__).resolve().parent
+REQUIREMENTS_PATH = ROOT / "requirements.txt"
 
-    def __init__(self):    # konstruktør som kjører når jeg lager objekt
-        # intern variable som senere blir "cuda" eller "openvino"
-        # starter som None fordi krever ikke hardware ennå
-        self.hardware_type = None
+BACKEND_PACKAGES = {
+    "tensorrt": [
+        ("tensorrt", "tensorrt"),
+        ("pycuda", "pycuda"),
+    ],
+    "openvino": [
+        ("openvino", "openvino"),
+    ],
+    "pytorch": [],
+}
 
-    # metode for å sjekke om maskinen har nvidia gpu
-    def detect_hardware(self):
 
-        # try-blokk for å håndtere feil om kommandoen ikke finnes
-        try:
-            # kjører en ekstern kommando
-            result = subprocess.run(
-                ['nvidia-smi', '--query-gpu=name', '--format=csv,noheader'],
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(
+        description="Install backend-specific dependencies for this project."
+    )
+    parser.add_argument(
+        "--backend",
+        choices=["auto", "tensorrt", "openvino", "pytorch"],
+        default="auto",
+        help="Which backend dependency set to install.",
+    )
+    parser.add_argument(
+        "--skip-common",
+        action="store_true",
+        help="Skip installing the base project requirements from requirements.txt.",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Print what would be installed without running pip.",
+    )
+    return parser.parse_args()
 
-                # fanger output istedet for å skrive i terminal
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                # timeout på 3 sekunder
-                timeout=3,
-                # regner output som tekst i stedet for bytes
-                text=True
-            )
-            # sjekker både om kommandoen ikke feilet
-            # og det faktisk finnes GPU-navn i output
-            if result.returncode == 0 and result.stdout.strip():
-                print(f"Found NVIDIA GPU: {result.stdout.strip()}")
-                self.hardware_type = 'cuda'
-                return 'cuda'
-        except (FileNotFoundError, subprocess.TimeoutExpired):
-            pass
 
-        # om ikke gpu blir funnet, sett hardware openVINO
-        self.hardware_type = 'openvino'
-        return 'openvino'
+def module_exists(module_name: str) -> bool:
+    return importlib.util.find_spec(module_name) is not None
 
-    # priv metode for installasjon av pakker
-    def _install(self, package):
-        # sjekker om pakken allerede r installert
-        if importlib.util.find_spec(package) is not None:
-            print(f"{package} already installed")
-            return True
 
-        print(f"Installing {package}...")
+def has_nvidia_smi_gpu() -> tuple[bool, str]:
+    """
+    Lightweight setup-time heuristic for choosing a backend before runtime.
 
-        try:
-            subprocess.check_call([
-                sys.executable,
-                "-m",
-                "pip",
-                "install",
-                "--no-input",  # forhindre pip å spørre y/n
-                "--quiet",
-                package
-            ])
-            # om installasjon lykkes
-            print(f"{package} installed")
-            return True
+    This is a heuristic for installation guidance, a
+    stricter runtime check is used inside HardwareDetector.
+    """
+    try:
+        result = subprocess.run(
+            ["nvidia-smi", "--query-gpu=name", "--format=csv,noheader"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=3,
+            text=True,
+            check=False,
+        )
+    except FileNotFoundError:
+        return False, "Auto backend selection: 'nvidia-smi' not found."
+    except subprocess.TimeoutExpired:
+        return False, "Auto backend selection: 'nvidia-smi' timed out."
 
-        except subprocess.CalledProcessError:
-            # om pip feiler
-            print(f"Failed to install {package}")
-            return False
+    names = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    if result.returncode == 0 and names:
+        return True, f"Auto backend selection: NVIDIA GPU detected ({', '.join(names)})."
 
-    # hovedmeny som starter alt
-    # kaller på hardware-detection
-    def install_dependencies(self):
-        hw = self.detect_hardware()
-        # skriver hvilken hardware som ble valgt
-        print(f"\nDetected hardware: {hw.upper()}\n")
+    stderr = result.stderr.strip()
+    if stderr:
+        return False, f"Auto backend selection: 'nvidia-smi' did not report a usable GPU ({stderr})."
+    return False, "Auto backend selection: no NVIDIA GPU reported by 'nvidia-smi'."
 
-        if hw == 'cuda':
-            # hvis nvidia gpu finnes, installer tensor
-            self._install('tensorrt')
-            # installer pycuda
-            self._install('pycuda')
-        else:
-            # hvis ingen nvidia gpu, installer openvino
-            self._install('openvino')
+
+def choose_backend(requested: str) -> tuple[str, list[str]]:
+    messages: list[str] = []
+
+    if requested != "auto":
+        messages.append(f"Backend selection: using explicit backend '{requested}'.")
+        return requested, messages
+
+    has_gpu, reason = has_nvidia_smi_gpu()
+    messages.append(reason)
+    if has_gpu:
+        messages.append("Backend selection: choosing 'tensorrt' for setup.")
+        return "tensorrt", messages
+
+    messages.append("Backend selection: choosing 'openvino' for setup.")
+    return "openvino", messages
+
+
+def run_pip_install(args: list[str], dry_run: bool) -> bool:
+    cmd = [sys.executable, "-m", "pip", "install", "--no-input", *args]
+    print("$", " ".join(cmd))
+    if dry_run:
+        return True
+
+    try:
+        subprocess.check_call(cmd)
+        return True
+    except subprocess.CalledProcessError:
+        return False
+
+
+def install_common_requirements(dry_run: bool) -> bool:
+    if not REQUIREMENTS_PATH.exists():
+        print(f"Base requirements file not found: {REQUIREMENTS_PATH}")
+        return False
+
+    print(f"Installing base requirements from {REQUIREMENTS_PATH}")
+    return run_pip_install(["-r", str(REQUIREMENTS_PATH)], dry_run=dry_run)
+
+
+def install_backend_packages(backend: str, dry_run: bool) -> bool:
+    ok = True
+    packages = BACKEND_PACKAGES.get(backend, [])
+    if not packages:
+        print(f"No backend-specific packages required for '{backend}'.")
+        return True
+
+    for module_name, package_name in packages:
+        if module_exists(module_name):
+            print(f"Dependency already installed: module '{module_name}'")
+            continue
+
+        print(f"Installing backend dependency '{package_name}' for backend '{backend}'")
+        if not run_pip_install([package_name], dry_run=dry_run):
+            print(f"Failed to install '{package_name}'")
+            ok = False
+    return ok
+
+
+def main() -> int:
+    args = parse_args()
+    backend, messages = choose_backend(args.backend)
+
+    print("Dependency setup")
+    for message in messages:
+        print("-", message)
+    print(f"- Dry run: {args.dry_run}")
+    print(f"- Install common requirements: {not args.skip_common}")
+
+    success = True
+    if not args.skip_common:
+        success = install_common_requirements(dry_run=args.dry_run) and success
+
+    success = install_backend_packages(backend, dry_run=args.dry_run) and success
+
+    if success:
+        print("Dependency setup completed successfully.")
+        return 0
+
+    print("Dependency setup completed with errors.")
+    return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
