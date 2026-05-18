@@ -90,6 +90,7 @@ def register_helmet(
 
 def preprocess_image(image: np.ndarray) -> np.ndarray:
     # Convert BGR to gray, upscale if too small, apply Gaussian blur then unsharp mask, return processed BGR.
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     if image.shape[0] < UPSCALE_THRESH or image.shape[1] < UPSCALE_THRESH:
         gray = cv2.resize(gray, None, fx=3, fy=3, interpolation=cv2.INTER_CUBIC)
     gaussian = cv2.GaussianBlur(gray, (0, 0), 2.0)
@@ -137,7 +138,7 @@ def _resize_to_height(image: np.ndarray, target_h: int) -> np.ndarray:
     return cv2.resize(image, (target_w, target_h), interpolation=cv2.INTER_NEAREST)
 
 
-def _save_ocr_debug_imagegeners(
+def _save_ocr_debug_images(
     original: np.ndarray,
     preprocessed: np.ndarray,
     track_id: int,
