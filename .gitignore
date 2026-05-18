@@ -25,3 +25,4 @@ output/*
 /models/ocr_model/processor_config.json
 /models/ocr_model/tokenizer.json
 /models/ocr_model/tokenizer_config.json
+/videos/*
