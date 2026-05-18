@@ -1,0 +1,73 @@
+- dataset:
+    id: allenai/olmOCR-bench
+    task_id: overall
+  value: 75.2
+  notes: "Excluding Headers & Footers category. Using ZAI API."
+  source:
+    url: https://huggingface.co/zai-org/GLM-OCR
+    name: GLM-OCR API evaluation
+    user: staghado
+- dataset:
+    id: allenai/olmOCR-bench
+    task_id: arxiv_math
+  value: 80.7
+  source:
+    url: https://huggingface.co/zai-org/GLM-OCR
+    name: GLM-OCR API evaluation
+    user: staghado
+- dataset:
+    id: allenai/olmOCR-bench
+    task_id: old_scans_math
+  value: 68.3
+  source:
+    url: https://huggingface.co/zai-org/GLM-OCR
+    name: GLM-OCR API evaluation
+    user: staghado
+- dataset:
+    id: allenai/olmOCR-bench
+    task_id: table_tests
+  value: 77.6
+  source:
+    url: https://huggingface.co/zai-org/GLM-OCR
+    name: GLM-OCR API evaluation
+    user: staghado
+- dataset:
+    id: allenai/olmOCR-bench
+    task_id: old_scans
+  value: 37.6
+  source:
+    url: https://huggingface.co/zai-org/GLM-OCR
+    name: GLM-OCR API evaluation
+    user: staghado
+- dataset:
+    id: allenai/olmOCR-bench
+    task_id: multi_column
+  value: 76.7
+  source:
+    url: https://huggingface.co/zai-org/GLM-OCR
+    name: GLM-OCR API evaluation
+    user: staghado
+- dataset:
+    id: allenai/olmOCR-bench
+    task_id: long_tiny_text
+  value: 86.9
+  source:
+    url: https://huggingface.co/zai-org/GLM-OCR
+    name: GLM-OCR API evaluation
+    user: staghado
+- dataset:
+    id: allenai/olmOCR-bench
+    task_id: headers_footers
+  value: 95.8
+  source:
+    url: https://huggingface.co/zai-org/GLM-OCR
+    name: GLM-OCR API evaluation
+    user: staghado
+- dataset:
+    id: allenai/olmOCR-bench
+    task_id: baseline
+  value: 98.8
+  source:
+    url: https://huggingface.co/zai-org/GLM-OCR
+    name: GLM-OCR API evaluation
+    user: staghado
