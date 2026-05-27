@@ -268,12 +268,6 @@ def prompt_race_setup():
     root.destroy()
     return result
 
-
-def hent_hjelmnummer():
-    setup = prompt_race_setup()
-    return setup.helmet_numbers if setup is not None else []
-
-
 if __name__ == "__main__":
     setup_result = prompt_race_setup()
     print(setup_result)

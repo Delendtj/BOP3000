@@ -7,7 +7,7 @@ from typing import Any
 
 import cv2
 
-from hardware_detector import HardwareDetector
+from functions.system.hardware_detector import HardwareDetector
 from pipeline.async_pipeline import AsyncFramePipeline
 from utilities.benchmark import OCRThroughputStats
 from utilities.downscale_to_1080p import downscale_to_1080p

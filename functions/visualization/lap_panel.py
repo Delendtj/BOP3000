@@ -1,6 +1,4 @@
 from dataclasses import dataclass
-from tkinter import simpledialog
-
 import cv2
 import numpy as np
 
@@ -142,21 +140,3 @@ def update_lap_panel_state(state: LapPanelState, *, tracker, finish_line, height
         state.key = panel_key
 
     return state
-
-def prompt_total_laps():
-    root = tk.Tk()
-    root.withdraw()
-    root.attributes("-topmost", True)
-
-    try:
-        while True:
-            total_laps = simpledialog.askinteger(
-                "Race Laps",
-                "Enter total laps for this race:",
-                minvalue=1,
-                parent=root,
-            )
-            if total_laps is not None:
-                return int(total_laps)
-    finally:
-        root.destroy()

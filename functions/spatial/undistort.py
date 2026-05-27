@@ -73,22 +73,3 @@ def undistort_points(points, img_shape=None):
     k = _scaled_K(img_shape)
     undist = cv2.fisheye.undistortPoints(pts, k, D, P=k)
     return undist.reshape(-1, 2)
-
-
-def distort_points(points, img_shape=None):
-    """
-    Distort undistorted pixel points back into the distorted wide image space.
-    points: iterable of (x, y) in undistorted pixel coordinates.
-    Returns Nx2 array of distorted pixel coordinates.
-    """
-    pts = np.asarray(points, dtype=np.float32).reshape(-1, 2)
-    k = _scaled_K(img_shape)
-
-    fx, fy = k[0, 0], k[1, 1]
-    cx, cy = k[0, 2], k[1, 2]
-    normalized = np.empty((pts.shape[0], 1, 2), dtype=np.float32)
-    normalized[:, 0, 0] = (pts[:, 0] - cx) / fx
-    normalized[:, 0, 1] = (pts[:, 1] - cy) / fy
-
-    distorted = cv2.fisheye.distortPoints(normalized, k, D)
-    return distorted.reshape(-1, 2)

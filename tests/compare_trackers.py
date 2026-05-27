@@ -9,7 +9,7 @@ ROOT_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 if ROOT_DIR not in sys.path:
     sys.path.insert(0, ROOT_DIR)
 
-from hardware_detector import HardwareDetector
+from functions.system.hardware_detector import HardwareDetector
 from trackers import ByteTrackTracker, OCSORTTracker
 from trackers.core.sort.tracker import SORTTracker
 
