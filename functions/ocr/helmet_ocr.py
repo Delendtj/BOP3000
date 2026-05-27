@@ -97,38 +97,6 @@ def preprocess_image(image: np.ndarray) -> np.ndarray:
     sharpened = cv2.addWeighted(gray, 2.0, gaussian, -1.0, 0)
     return cv2.cvtColor(sharpened, cv2.COLOR_GRAY2BGR)
 
-
-def _log_preprocessing_pair(
-    before: np.ndarray,
-    after: np.ndarray,
-    track_id: int,
-    raw_text: str,
-    digits: str,
-    ocr_conf: float,
-) -> None:
-    # Save a side-by-side before/after preprocessing image with metadata footer to the preprocess log directory.
-    global _preprocess_log_index
-    PREPROCESS_LOG_DIR.mkdir(parents=True, exist_ok=True)
-    before_bgr = before if before.ndim == 3 else cv2.cvtColor(before, cv2.COLOR_GRAY2BGR)
-    after_bgr = after if after.ndim == 3 else cv2.cvtColor(after, cv2.COLOR_GRAY2BGR)
-    target_h = max(before_bgr.shape[0], after_bgr.shape[0])
-    before_panel = _resize_to_height(before_bgr, target_h)
-    after_panel = _resize_to_height(after_bgr, target_h)
-    separator = np.full((target_h, 8, 3), 32, dtype=np.uint8)
-    combined = np.hstack((before_panel, separator, after_panel))
-    footer_h = 88
-    footer = np.full((footer_h, combined.shape[1], 3), 18, dtype=np.uint8)
-    raw_label = raw_text or "<none>"
-    cv2.putText(footer, f"track_id: {track_id}", (8, 22), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (255, 255, 255), 1, cv2.LINE_AA)
-    cv2.putText(footer, f"raw: {raw_label[:140]}", (8, 46), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (200, 200, 200), 1, cv2.LINE_AA)
-    cv2.putText(footer, f"digits: {digits or '<empty>'}   conf: {ocr_conf:.1f}", (8, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 255), 1, cv2.LINE_AA)
-    combined = np.vstack((combined, footer))
-    file_index = _preprocess_log_index % PREPROCESS_LOG_MAX_IMAGES
-    output_path = PREPROCESS_LOG_DIR / f"preprocess_{file_index:02d}.png"
-    cv2.imwrite(str(output_path), combined)
-    _preprocess_log_index += 1
-
-
 def _resize_to_height(image: np.ndarray, target_h: int) -> np.ndarray:
     # Resize an image to a target height while preserving aspect ratio.
     if image.shape[0] == target_h:

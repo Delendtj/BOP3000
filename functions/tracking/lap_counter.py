@@ -6,13 +6,6 @@ from math import hypot
 # Lap counting is kept separate from the tracker wrapper so it stays testable.
 epsilon = 1e-6
 
-
-def bbox_center(bbox):
-    # Return the center point of an xyxy bounding box.
-    x1, y1, x2, y2 = bbox
-    return ((float(x1) + float(x2)) / 2.0, (float(y1) + float(y2)) / 2.0)
-
-
 def bbox_bottom_right(bbox):
     # Use the box bottom-right corner as the finish-line reference point.
     _x1, _y1, x2, y2 = bbox
@@ -24,16 +17,6 @@ def display_sort_key(value):
         return (0, int(value))
     except (TypeError, ValueError):
         return (1, str(value))
-
-
-def line_side_value(point, line):
-    # Preserve the original signed-side helper for geometry tests.
-    if line is None or len(line) != 2 or point is None:
-        return None
-    (ax, ay), (bx, by) = line
-    px, py = point
-    return ((bx - ax) * (py - ay)) - ((by - ay) * (px - ax))
-
 
 def movement_distance(point_a, point_b):
     # Return the distance moved between consecutive track points.
@@ -64,41 +47,6 @@ def point_near_finish_line(point, line, band_px):
     min_y = min(float(line[0][1]), float(line[1][1])) - float(band_px)
     max_y = max(float(line[0][1]), float(line[1][1])) + float(band_px)
     return min_y <= float(point[1]) <= max_y and abs(offset) <= float(band_px)
-
-
-def _orientation(a, b, c):
-    value = ((b[0] - a[0]) * (c[1] - a[1])) - ((b[1] - a[1]) * (c[0] - a[0]))
-    if abs(value) <= epsilon:
-        return 0
-    return 1 if value > 0 else -1
-
-
-def _on_segment(a, b, c):
-    return (
-        min(a[0], c[0]) - epsilon <= b[0] <= max(a[0], c[0]) + epsilon
-        and min(a[1], c[1]) - epsilon <= b[1] <= max(a[1], c[1]) + epsilon
-    )
-
-
-def segments_intersect(p1, p2, q1, q2):
-    # Preserve the original segment-intersection helper for geometry tests.
-    o1 = _orientation(p1, p2, q1)
-    o2 = _orientation(p1, p2, q2)
-    o3 = _orientation(q1, q2, p1)
-    o4 = _orientation(q1, q2, p2)
-
-    if o1 != o2 and o3 != o4:
-        return True
-    if o1 == 0 and _on_segment(p1, q1, p2):
-        return True
-    if o2 == 0 and _on_segment(p1, q2, p2):
-        return True
-    if o3 == 0 and _on_segment(q1, p1, q2):
-        return True
-    if o4 == 0 and _on_segment(q1, p2, q2):
-        return True
-    return False
-
 
 def should_count_lap_crossing(prev_point, curr_point, line, last_offset, current_offset, min_movement_px):
     # Count only real left-to-right crossings and reject small jitter around the line.

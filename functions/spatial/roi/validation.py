@@ -27,20 +27,6 @@ def roi_inside_roi(inner_roi, outer_roi):
         return False
     return all(point_in_roi((x, y), outer_roi) for x, y in inner_roi)
 
-
-def filter_dets_by_roi(det, roi):
-    if det is None or roi is None:
-        return det
-    kept = []
-    for row in det:
-        x1, y1, x2, y2 = row[:4]
-        if bbox_center_in_roi((x1, y1, x2, y2), roi):
-            kept.append(row)
-    if not kept:
-        return None
-    return np.asarray(kept)
-
-
 def validate_finish_line(line, frame_shape=None, roi=None, min_length_px=20.0, min_vertical_span_px=20.0):
     if line is None:
         return None
