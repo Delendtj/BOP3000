@@ -1,3 +1,4 @@
+import copy
 import numpy as np
 import supervision as sv
 
@@ -70,6 +71,58 @@ class Tracker:
 
     def get_active_lap_counts(self):
         return self.lap_counter.get_active_lap_counts(self.people_tracks)
+
+    def track_helmet_detections(self, close_helmets: sv.Detections) -> sv.Detections:
+        """
+        Run ByteTrack on helmet detections to assign persistent track IDs.
+
+        Returns the tracked detections (same structure as input, but with
+        ``tracker_id`` column filled by ByteTrack).  This is necessary so
+        that helmet crops carry a stable identity across frames, which in
+        turn enables OCR voting / consensus logic later.
+
+        Parameters
+        ----------
+        close_helmets : sv.Detections
+            Raw helmet detections from the close-camera YOLO inference.
+
+        Returns
+        -------
+        sv.Detections
+            Helmet detections with persistent ``tracker_id`` values.
+        """
+        if close_helmets is None or len(close_helmets) == 0:
+            return sv.Detections.empty()
+
+        helmet_detections = close_helmets  # already filtered to class 0 by YOLO
+        helmet_for_tracker = helmet_detections[helmet_detections.confidence > self.conf_threshold]
+
+        tracked = self.tracker_helmet.update(helmet_for_tracker)
+
+        # Merge tracker_id back into original detections
+        # (untracked helmets keep tracker_id == -1)
+        if len(tracked) == 0:
+            out = copy.deepcopy(close_helmets)
+            out.data["tracker_id"] = np.full(len(out), -1, dtype=int)
+            return out
+
+        # Create a full copy with tracker_id initialized to -1
+        out = copy.deepcopy(close_helmets)
+        out.data["tracker_id"] = np.full(len(close_helmets), -1, dtype=int)
+
+        # Map tracked detections back to original detections by bounding-box IoU.
+        # ByteTrack.update() returns a Detections object that may reorder
+        # detections and no longer carries the original indices, so we match
+        # by IoU (threshold 0.1 is generous for helmet-sized boxes).
+        iou_threshold = 0.1
+        # sv.box_iou_batch expects (N, 4) arrays, not Detections objects
+        iou_matrix = sv.box_iou_batch(tracked.xyxy, close_helmets.xyxy)  # shape (n_tracked, n_original)
+        for i in range(len(tracked)):
+            best_j = np.argmax(iou_matrix[i])
+            if iou_matrix[i, best_j] >= iou_threshold:
+                out.data["tracker_id"][best_j] = int(tracked.tracker_id[i])
+
+        return out
 
     def track_detection(self, detections: sv.Detections):
         people_detections = detections[detections.class_id == self.person_class_id]
