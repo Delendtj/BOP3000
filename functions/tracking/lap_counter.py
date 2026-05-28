@@ -86,10 +86,14 @@ class LapCounter:
         self.min_lap_movement_px = 8.0
         self.finish_line_band_px = 24.0
         self.cross_state_ttl_frames = max(30, int(round(self.frame_rate * 5.0)))
+        # Persistent ghost entries: confirmed helmet numbers that have been lost.
+        # These survive track drops and are never auto-removed.
+        self._ghost_entries = {}  # helmet_number -> lap_count
         self.set_finish_line(finish_line)
 
     def set_finish_line(self, line):
-        # Reset all lap state when the finish line geometry changes.
+        # Reset crossing state when the finish line geometry changes.
+        # Lap counts and ghost entries survive — identified helmets are permanent.
         next_line = [tuple(map(int, pt)) for pt in line] if line is not None and len(line) == 2 else None
         line_changed = next_line != self.finish_line
         self.finish_line = next_line
@@ -102,9 +106,10 @@ class LapCounter:
         self.total_laps = int(total_laps) if total_laps is not None else None
 
     def reset(self):
-        # Clear all in-memory lap counts and crossing history.
+        # Clear all in-memory lap counts, crossing history, and ghost entries.
         self.person_lap_counts.clear()
         self.person_cross_state.clear()
+        self._ghost_entries.clear()
 
     def _identity_key(self, track_id, helmet_number=-1):
         if helmet_number not in (-1, None, ""):
@@ -118,14 +123,34 @@ class LapCounter:
         temp_key = self._identity_key(track_id)
         helmet_key = self._identity_key(track_id, helmet_number)
 
+        # Merge any existing lap counts so they are never lost.
+        existing = self.person_lap_counts.get(helmet_key, 0)
         if temp_key in self.person_lap_counts:
-            self.person_lap_counts[helmet_key] += int(self.person_lap_counts.pop(temp_key))
+            existing += int(self.person_lap_counts[temp_key])
+        if existing:
+            self.person_lap_counts[helmet_key] = existing
+            # Remove stale temp key if it didn't contribute.
+            if temp_key in self.person_lap_counts and self.person_lap_counts[temp_key] == 0:
+                del self.person_lap_counts[temp_key]
 
         if temp_key in self.person_cross_state:
             self.person_cross_state[helmet_key] = self.person_cross_state.pop(temp_key)
 
+    def register_lost_helmet(self, helmet_number, lap_count):
+        """Register a confirmed helmet as a persistent ghost entry.
+        Called when a confirmed track is dropped so it survives in the panel."""
+        if helmet_number in self._ghost_entries:
+            # Preserve existing count (don't overwrite on re-confirmation).
+            existing = self._ghost_entries[helmet_number]
+            self._ghost_entries[helmet_number] = max(existing, lap_count)
+        else:
+            self._ghost_entries[helmet_number] = lap_count
+
     def get_active_lap_counts(self, people_tracks):
         rows = []
+
+        # --- active tracks ---
+        active_helmet_numbers = set()
         for i, tid in enumerate(people_tracks.tracker_id):
             tid = int(tid)
             if tid == -1:
@@ -137,15 +162,35 @@ class LapCounter:
 
             if helmet_number not in (-1, None, ""):
                 display_id = helmet_number
+                active_helmet_numbers.add(helmet_number)
+                lap_count = self.get_lap_count(tid, helmet_number)
+                # Register as ghost so it persists even if the track drops.
+                self.register_lost_helmet(helmet_number, lap_count)
             else:
                 display_id = f"T{tid}"
+                lap_count = self.get_lap_count(tid, helmet_number)
 
             rows.append(
                 {
                     "track_id": tid,
                     "display_id": display_id,
-                    "lap_count": self.get_lap_count(tid, helmet_number),
+                    "lap_count": lap_count,
                     "predicted": bool(people_tracks.confidence[i] == 0),
+                    "confirmed": helmet_number not in (-1, None, ""),
+                }
+            )
+
+        # --- ghost (lost) confirmed helmets ---
+        for helmet_number, count in self._ghost_entries.items():
+            if helmet_number in active_helmet_numbers:
+                continue
+            rows.append(
+                {
+                    "track_id": -1,
+                    "display_id": helmet_number,
+                    "lap_count": count,
+                    "predicted": False,
+                    "confirmed": True,
                 }
             )
 

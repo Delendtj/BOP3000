@@ -60,26 +60,39 @@ def render_lap_panel(height, width, lap_rows, finish_line_ready, total_laps):
 
     # Keep each row compact so the panel stays readable while updating live.
     for row in lap_rows:
-        cv2.rectangle(panel, (16, y - 28), (width - 16, y + 16), (45, 45, 45), -1)
+        # Confirmed (OCR-identified) helmet numbers get a distinct accent color.
+        is_confirmed = row.get("confirmed", False)
+
+        # Row background highlight for confirmed tracks.
+        row_bg = (60, 45, 20) if is_confirmed else (45, 45, 45)
+        cv2.rectangle(panel, (16, y - 28), (width - 16, y + 16), row_bg, -1)
+
+        # Left accent bar for confirmed entries.
+        if is_confirmed:
+            cv2.rectangle(panel, (16, y - 28), (22, y + 16), (0, 200, 120), -1)
+
+        # Helmet number / ID text.
+        id_color = (0, 255, 160) if is_confirmed else (255, 255, 255)
         cv2.putText(
             panel,
             f"ID {row['display_id']}",
             (28, y),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.8,
-            (255, 255, 255),
+            id_color,
             2,
         )
         lap_text = f"{row['lap_count']} / {total_laps}"
         lap_text_size = cv2.getTextSize(lap_text, cv2.FONT_HERSHEY_SIMPLEX, 0.8, 2)[0]
         lap_x = width - 28 - lap_text_size[0]
+        lap_color = (0, 220, 180) if is_confirmed else (0, 220, 255)
         cv2.putText(
             panel,
             lap_text,
             (lap_x, y),
             cv2.FONT_HERSHEY_SIMPLEX,
             0.8,
-            (0, 220, 255),
+            lap_color,
             2,
         )
         remaining_laps = max(int(total_laps) - int(row["lap_count"]), 0)
@@ -92,16 +105,6 @@ def render_lap_panel(height, width, lap_rows, finish_line_ready, total_laps):
             (180, 180, 180),
             1,
         )
-        if row["predicted"]:
-            cv2.putText(
-                panel,
-                "predicted",
-                (180, y + 24),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.5,
-                (180, 180, 180),
-                1,
-            )
         y += 62
         if y > height - 24:
             cv2.putText(
@@ -124,7 +127,7 @@ def update_lap_panel_state(state: LapPanelState, *, tracker, finish_line, height
         finish_line is not None,
         int(tracker.total_laps),
         tuple(
-            (row["track_id"], row["display_id"], row["lap_count"], row["predicted"])
+            (row["track_id"], row["display_id"], row["lap_count"], row["predicted"], row.get("confirmed", False))
             for row in lap_rows
         ),
     )
