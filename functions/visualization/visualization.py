@@ -255,6 +255,6 @@ def compute_window_layout(screen_width, screen_height):
 
 
 def setup_window(window_layout, *, window_name):
-    cv2.namedWindow(window_name, cv2.WINDOW_NORMAL)
+    cv2.namedWindow(window_name, cv2.WINDOW_AUTOSIZE)
     cv2.resizeWindow(window_name, *window_layout["dashboard_size"])
     cv2.moveWindow(window_name, *window_layout["dashboard_pos"])

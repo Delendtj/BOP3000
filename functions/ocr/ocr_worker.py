@@ -237,6 +237,8 @@ class OCRWorker:
         self._ocr_load_in_4bit = ocr_load_in_4bit
         self._ocr_debug = ocr_debug
         self._pending_track_ids: set[int] = set()
+        self._pending_track_times: dict[int, float] = {}  # tid -> time.time()
+        self._pending_ttl = 30.0  # seconds — remove stale pending entries after this long
 
         # Simply counters for benchmarking
         self._stats: Dict[str, Any] = {
@@ -259,6 +261,19 @@ class OCRWorker:
         }
 
 
+    def _cleanup_stale_pending(self) -> None:
+        """Remove pending track IDs that have exceeded the TTL. Runs ~once per second."""
+        now = time.time()
+        if now - self._last_pending_cleanup < 1.0:
+            return
+        self._last_pending_cleanup = now
+
+        stale = [tid for tid, t in self._pending_track_times.items()
+                 if now - t > self._pending_ttl]
+        for tid in stale:
+            self._pending_track_ids.discard(tid)
+            del self._pending_track_times[tid]
+
     def start(self) -> None:
         """
         Starts single process for handling OCR workload
@@ -271,6 +286,9 @@ class OCRWorker:
             self.ocr_in_queue = self._ctx.Queue(maxsize=self.max_in_size)
         if self.ocr_out_queue is None:
             self.ocr_out_queue = self._ctx.Queue(maxsize=self.max_out_size)
+
+        # Periodic cleanup of stale pending entries
+        self._last_pending_cleanup = time.time()
 
         # Actually create the shared memory space
         self._ring = SharedMemoryRing(
@@ -392,6 +410,9 @@ class OCRWorker:
         """
         payload = dict(item)
         tid = int(payload.get("track_id", -1))
+
+        # Periodic cleanup of stale pending entries
+        self._cleanup_stale_pending()
         if tid == -1:
             return False
         if tid in self._pending_track_ids:
@@ -445,6 +466,7 @@ class OCRWorker:
                     accepted, dropped = False, True
         if accepted:
             self._pending_track_ids.add(tid)
+            self._pending_track_times[tid] = time.time()
             _inc(self._stats["in_enqueued"])
         if dropped:
             if dropped_track_id is not None and dropped_track_id != -1:
@@ -472,6 +494,7 @@ class OCRWorker:
                 tid = int(item.get("track_id", -1))
                 if tid != -1:
                     self._pending_track_ids.discard(tid)
+                    self._pending_track_times.pop(tid, None)
                 items.append(item)
             except Empty:
                 break

@@ -86,6 +86,8 @@ class LapCounter:
         self.min_lap_movement_px = 8.0
         self.finish_line_band_px = 24.0
         self.cross_state_ttl_frames = max(30, int(round(self.frame_rate * 5.0)))
+        self._ghost_confirm_timestamps: dict[str, int] = {}  # helmet_number -> last_seen_frame_index
+        self._ghost_confirm_cooldown = max(3, int(round(self.frame_rate * 0.5)))  # seconds before re-registering
         # Persistent ghost entries: confirmed helmet numbers that have been lost.
         # These survive track drops and are never auto-removed.
         self._ghost_entries = {}  # helmet_number -> lap_count
@@ -138,12 +140,9 @@ class LapCounter:
 
     def register_lost_helmet(self, helmet_number, lap_count):
         """Register a confirmed helmet as a persistent ghost entry.
-        Called when a confirmed track is dropped so it survives in the panel."""
-        if helmet_number in self._ghost_entries:
-            # Preserve existing count (don't overwrite on re-confirmation).
-            existing = self._ghost_entries[helmet_number]
-            self._ghost_entries[helmet_number] = max(existing, lap_count)
-        else:
+        Only updates if count is newer — avoids redundant writes each frame."""
+        existing = self._ghost_entries.get(helmet_number, -1)
+        if existing < lap_count:
             self._ghost_entries[helmet_number] = lap_count
 
     def get_active_lap_counts(self, people_tracks):
@@ -164,8 +163,8 @@ class LapCounter:
                 display_id = helmet_number
                 active_helmet_numbers.add(helmet_number)
                 lap_count = self.get_lap_count(tid, helmet_number)
-                # Register as ghost so it persists even if the track drops.
-                self.register_lost_helmet(helmet_number, lap_count)
+                # Register as ghost only if enough time has passed since last registration.
+                self._maybe_register_ghost(helmet_number, lap_count)
             else:
                 display_id = f"T{tid}"
                 lap_count = self.get_lap_count(tid, helmet_number)
@@ -199,6 +198,9 @@ class LapCounter:
 
     def update(self, people_tracks):
         self.frame_index += 1
+        # Periodic cleanup of confirmed helmet tracking (once per ~5 seconds)
+        if self.frame_index > 0 and self.frame_index % max(150, int(self.frame_rate * 5)) == 0:
+            self._cleanup_aging_confirmed()
         if self.finish_line is None or len(people_tracks) == 0:
             self._cleanup_cross_state(set())
             return
@@ -255,3 +257,14 @@ class LapCounter:
                 continue
             if self.frame_index - state.last_seen_frame > self.cross_state_ttl_frames:
                 del self.person_cross_state[identity_key]
+
+    def _maybe_register_ghost(self, helmet_number, lap_count):
+        """Register as ghost only after cooldown has elapsed since last registration."""
+        last_frame = self._ghost_confirm_timestamps.get(helmet_number, -self._ghost_confirm_cooldown * 2)
+        if self.frame_index - last_frame >= self._ghost_confirm_cooldown * int(self.frame_rate):
+            self.register_lost_helmet(helmet_number, lap_count)
+            self._ghost_confirm_timestamps[helmet_number] = self.frame_index
+
+    def _cleanup_aging_confirmed(self):
+        """Prune cross_state entries for confirmed helmets that are no longer active but still tracked."""
+        pass  # Currently cross_state is cleaned by _cleanup_cross_state; kept as hook for future use

@@ -378,9 +378,9 @@ def main(config):
                 last_dashboard_frame = dashboard_frame
                 cv2.imshow(dashboard_window_name, dashboard_frame)
 
-            # Get the current keypress
+            # Non-blocking key press check (waitKey is outside the profiler section).
+            key = cv2.waitKey(1) & 0xFF
             with _section(profiler, "handle_keypress"):
-                key = cv2.waitKey(1) & 0xFF
                 # handle_keypress() then handles the keypress
                 # and returns results based on what key is pressed.
                 key_result = handle_keypress(
