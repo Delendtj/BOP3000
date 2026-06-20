@@ -210,6 +210,10 @@ def main(config):
 
                         close_vis = close_frame.copy()
 
+                        # Run helmet tracker to assign persistent track IDs
+                        # (needed for OCR voting / cross-frame consistency)
+                        close_helmets = context.tracker.track_helmet_detections(close_helmets)
+
                         # Draw boxes on each
                         draw_bboxes(close_vis, close_helmets, (0, 0, 255), thickness=2)
                         draw_bboxes(close_vis, close_people, (255, 0, 0), thickness=2)
